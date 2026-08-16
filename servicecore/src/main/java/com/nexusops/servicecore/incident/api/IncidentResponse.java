@@ -17,6 +17,8 @@ public record IncidentResponse(
         Urgency urgency,
         Priority priority,
         IncidentStatus status,
+        String assigneeId,
+        String teamId,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -30,6 +32,8 @@ public record IncidentResponse(
                 incident.getUrgency(),
                 incident.getPriority(),
                 incident.getStatus(),
+                incident.getAssigneeId(),
+                incident.getTeamId(),
                 incident.getCreatedAt(),
                 incident.getUpdatedAt()
         );

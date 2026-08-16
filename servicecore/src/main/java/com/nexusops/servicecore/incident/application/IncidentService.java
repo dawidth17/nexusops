@@ -5,12 +5,14 @@ import com.nexusops.servicecore.incident.domain.Incident;
 import com.nexusops.servicecore.incident.domain.Urgency;
 import com.nexusops.servicecore.incident.repository.IncidentRepository;
 import com.nexusops.servicecore.incident.repository.IncidentSpecifications;
+import com.nexusops.servicecore.sla.application.SlaService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -19,11 +21,17 @@ import java.util.UUID;
 public class IncidentService {
 
     private final IncidentRepository incidentRepository;
+    private final SlaService slaService;
+    private final Clock clock;
 
     public IncidentService(
-            IncidentRepository incidentRepository
+            IncidentRepository incidentRepository,
+            SlaService slaService,
+            Clock clock
     ) {
         this.incidentRepository = incidentRepository;
+        this.slaService = slaService;
+        this.clock = clock;
     }
 
     public Incident create(
@@ -39,7 +47,12 @@ public class IncidentService {
                 urgency
         );
 
-        return incidentRepository.save(incident);
+        Incident savedIncident =
+                incidentRepository.saveAndFlush(incident);
+
+        slaService.createForIncident(savedIncident);
+
+        return savedIncident;
     }
 
     @Transactional(readOnly = true)
@@ -166,6 +179,11 @@ public class IncidentService {
 
         incident.startProgress();
 
+        slaService.markFirstResponse(
+                incidentId,
+                clock.instant()
+        );
+
         return incident;
     }
 
@@ -182,6 +200,11 @@ public class IncidentService {
 
         incident.resolve();
 
+        slaService.markResolved(
+                incidentId,
+                clock.instant()
+        );
+
         return incident;
     }
 
@@ -189,6 +212,8 @@ public class IncidentService {
         Incident incident = findIncident(incidentId);
 
         incident.reopen();
+
+        slaService.markReopened(incidentId);
 
         return incident;
     }

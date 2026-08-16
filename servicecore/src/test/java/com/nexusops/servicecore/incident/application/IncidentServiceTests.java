@@ -6,6 +6,7 @@ import com.nexusops.servicecore.incident.domain.IncidentStatus;
 import com.nexusops.servicecore.incident.domain.Priority;
 import com.nexusops.servicecore.incident.domain.Urgency;
 import com.nexusops.servicecore.incident.repository.IncidentRepository;
+import com.nexusops.servicecore.sla.application.SlaService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -17,6 +18,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,16 +37,23 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class IncidentServiceTests {
 
+    private static final Instant NOW =
+            Instant.parse("2026-08-17T10:00:00Z");
+
+    private static final Clock CLOCK =
+            Clock.fixed(NOW, ZoneOffset.UTC);
+
     @Mock
     private IncidentRepository incidentRepository;
 
-    @Test
-    void createsIncident() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+    @Mock
+    private SlaService slaService;
 
-        when(incidentRepository.save(any(Incident.class)))
+    @Test
+    void createsIncidentAndSla() {
+        IncidentService service = createService();
+
+        when(incidentRepository.saveAndFlush(any(Incident.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         Incident incident = service.create(
@@ -60,19 +71,23 @@ class IncidentServiceTests {
         assertEquals(Impact.HIGH, incident.getImpact());
         assertEquals(Urgency.HIGH, incident.getUrgency());
         assertEquals(Priority.P1, incident.getPriority());
-        assertEquals(IncidentStatus.OPEN, incident.getStatus());
+        assertEquals(
+                IncidentStatus.OPEN,
+                incident.getStatus()
+        );
 
-        verify(incidentRepository).save(incident);
+        verify(incidentRepository)
+                .saveAndFlush(incident);
+
+        verify(slaService)
+                .createForIncident(incident);
     }
 
     @Test
     void getsIncidentById() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
-
         Incident incident = createIncident();
 
         when(incidentRepository.findById(incidentId))
@@ -82,14 +97,13 @@ class IncidentServiceTests {
 
         assertEquals(incident, result);
 
-        verify(incidentRepository).findById(incidentId);
+        verify(incidentRepository)
+                .findById(incidentId);
     }
 
     @Test
     void rejectsMissingIncident() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
 
@@ -104,9 +118,7 @@ class IncidentServiceTests {
 
     @Test
     void searchesIncidents() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         IncidentSearchCriteria criteria =
                 new IncidentSearchCriteria(
@@ -163,9 +175,7 @@ class IncidentServiceTests {
 
     @Test
     void rejectsNullSearchCriteria() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         Pageable pageable = PageRequest.of(0, 20);
 
@@ -187,9 +197,7 @@ class IncidentServiceTests {
 
     @Test
     void rejectsNullPageable() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         IncidentSearchCriteria criteria =
                 new IncidentSearchCriteria(
@@ -220,12 +228,9 @@ class IncidentServiceTests {
 
     @Test
     void updatesIncidentAssessment() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
-
         Incident incident = createIncident();
 
         when(incidentRepository.findById(incidentId))
@@ -244,12 +249,9 @@ class IncidentServiceTests {
 
     @Test
     void assignsIncidentToTeam() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
-
         Incident incident = createIncident();
 
         when(incidentRepository.findById(incidentId))
@@ -268,12 +270,9 @@ class IncidentServiceTests {
 
     @Test
     void assignsIncidentToUser() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
-
         Incident incident = createIncident();
 
         when(incidentRepository.findById(incidentId))
@@ -292,9 +291,7 @@ class IncidentServiceTests {
 
     @Test
     void clearsIncidentAssignee() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
 
@@ -304,18 +301,15 @@ class IncidentServiceTests {
         when(incidentRepository.findById(incidentId))
                 .thenReturn(Optional.of(incident));
 
-        Incident result = service.clearAssignee(
-                incidentId
-        );
+        Incident result =
+                service.clearAssignee(incidentId);
 
         assertTrue(result.getAssigneeId() == null);
     }
 
     @Test
     void clearsIncidentTeam() {
-        IncidentService service = new IncidentService(
-                incidentRepository
-        );
+        IncidentService service = createService();
 
         UUID incidentId = UUID.randomUUID();
 
@@ -325,11 +319,136 @@ class IncidentServiceTests {
         when(incidentRepository.findById(incidentId))
                 .thenReturn(Optional.of(incident));
 
-        Incident result = service.clearTeam(
-                incidentId
-        );
+        Incident result =
+                service.clearTeam(incidentId);
 
         assertTrue(result.getTeamId() == null);
+    }
+
+    @Test
+    void startsProgressAndRecordsFirstResponse() {
+        IncidentService service = createService();
+
+        UUID incidentId = UUID.randomUUID();
+        Incident incident = createIncident();
+
+        when(incidentRepository.findById(incidentId))
+                .thenReturn(Optional.of(incident));
+
+        Incident result =
+                service.startProgress(incidentId);
+
+        assertEquals(
+                IncidentStatus.IN_PROGRESS,
+                result.getStatus()
+        );
+
+        verify(slaService).markFirstResponse(
+                incidentId,
+                NOW
+        );
+    }
+
+    @Test
+    void returnsIncidentToOpen() {
+        IncidentService service = createService();
+
+        UUID incidentId = UUID.randomUUID();
+
+        Incident incident = createIncident();
+        incident.startProgress();
+
+        when(incidentRepository.findById(incidentId))
+                .thenReturn(Optional.of(incident));
+
+        Incident result =
+                service.returnToOpen(incidentId);
+
+        assertEquals(
+                IncidentStatus.OPEN,
+                result.getStatus()
+        );
+    }
+
+    @Test
+    void resolvesIncidentAndRecordsResolution() {
+        IncidentService service = createService();
+
+        UUID incidentId = UUID.randomUUID();
+
+        Incident incident = createIncident();
+        incident.startProgress();
+
+        when(incidentRepository.findById(incidentId))
+                .thenReturn(Optional.of(incident));
+
+        Incident result =
+                service.resolve(incidentId);
+
+        assertEquals(
+                IncidentStatus.RESOLVED,
+                result.getStatus()
+        );
+
+        verify(slaService).markResolved(
+                incidentId,
+                NOW
+        );
+    }
+
+    @Test
+    void reopensIncidentAndSla() {
+        IncidentService service = createService();
+
+        UUID incidentId = UUID.randomUUID();
+
+        Incident incident = createIncident();
+        incident.startProgress();
+        incident.resolve();
+
+        when(incidentRepository.findById(incidentId))
+                .thenReturn(Optional.of(incident));
+
+        Incident result =
+                service.reopen(incidentId);
+
+        assertEquals(
+                IncidentStatus.IN_PROGRESS,
+                result.getStatus()
+        );
+
+        verify(slaService)
+                .markReopened(incidentId);
+    }
+
+    @Test
+    void closesIncident() {
+        IncidentService service = createService();
+
+        UUID incidentId = UUID.randomUUID();
+
+        Incident incident = createIncident();
+        incident.startProgress();
+        incident.resolve();
+
+        when(incidentRepository.findById(incidentId))
+                .thenReturn(Optional.of(incident));
+
+        Incident result =
+                service.close(incidentId);
+
+        assertEquals(
+                IncidentStatus.CLOSED,
+                result.getStatus()
+        );
+    }
+
+    private IncidentService createService() {
+        return new IncidentService(
+                incidentRepository,
+                slaService,
+                CLOCK
+        );
     }
 
     private Incident createIncident() {

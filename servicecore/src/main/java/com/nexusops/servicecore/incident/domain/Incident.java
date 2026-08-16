@@ -45,6 +45,12 @@ public class Incident {
     @Column(nullable = false, length = 30)
     private IncidentStatus status;
 
+    @Column(name = "assignee_id", length = 255)
+    private String assigneeId;
+
+    @Column(name = "team_id", length = 255)
+    private String teamId;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -81,6 +87,22 @@ public class Incident {
         this.impact = Objects.requireNonNull(impact, "impact must not be null");
         this.urgency = Objects.requireNonNull(urgency, "urgency must not be null");
         this.priority = PriorityCalculator.calculate(impact, urgency);
+    }
+
+    public void assignToTeam(String teamId) {
+        this.teamId = requireText(teamId, "teamId");
+    }
+
+    public void assignToUser(String assigneeId) {
+        this.assigneeId = requireText(assigneeId, "assigneeId");
+    }
+
+    public void clearAssignee() {
+        this.assigneeId = null;
+    }
+
+    public void clearTeam() {
+        this.teamId = null;
     }
 
     public void startProgress() {
@@ -142,7 +164,9 @@ public class Incident {
 
     private static String requireText(String value, String fieldName) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(fieldName + " must not be blank");
+            throw new IllegalArgumentException(
+                    fieldName + " must not be blank"
+            );
         }
 
         return value.trim();
@@ -174,6 +198,14 @@ public class Incident {
 
     public IncidentStatus getStatus() {
         return status;
+    }
+
+    public String getAssigneeId() {
+        return assigneeId;
+    }
+
+    public String getTeamId() {
+        return teamId;
     }
 
     public Instant getCreatedAt() {

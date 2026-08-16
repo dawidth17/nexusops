@@ -3,6 +3,7 @@ package com.nexusops.servicecore.incident.domain;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class IncidentTests {
@@ -21,6 +22,14 @@ class IncidentTests {
     }
 
     @Test
+    void createsIncidentWithoutAssignment() {
+        Incident incident = createIncident();
+
+        assertNull(incident.getTeamId());
+        assertNull(incident.getAssigneeId());
+    }
+
+    @Test
     void recalculatesPriorityWhenAssessmentChanges() {
         Incident incident = Incident.create(
                 "Email service degraded",
@@ -34,6 +43,57 @@ class IncidentTests {
         assertEquals(Impact.HIGH, incident.getImpact());
         assertEquals(Urgency.MEDIUM, incident.getUrgency());
         assertEquals(Priority.P2, incident.getPriority());
+    }
+
+    @Test
+    void assignsIncidentToTeamAndUser() {
+        Incident incident = createIncident();
+
+        incident.assignToTeam("network-operations");
+        incident.assignToUser("user-123");
+
+        assertEquals("network-operations", incident.getTeamId());
+        assertEquals("user-123", incident.getAssigneeId());
+    }
+
+    @Test
+    void trimsAssignmentIdentifiers() {
+        Incident incident = createIncident();
+
+        incident.assignToTeam("  network-operations  ");
+        incident.assignToUser("  user-123  ");
+
+        assertEquals("network-operations", incident.getTeamId());
+        assertEquals("user-123", incident.getAssigneeId());
+    }
+
+    @Test
+    void clearsAssignment() {
+        Incident incident = createIncident();
+
+        incident.assignToTeam("network-operations");
+        incident.assignToUser("user-123");
+
+        incident.clearAssignee();
+        incident.clearTeam();
+
+        assertNull(incident.getAssigneeId());
+        assertNull(incident.getTeamId());
+    }
+
+    @Test
+    void rejectsBlankAssignmentIdentifiers() {
+        Incident incident = createIncident();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> incident.assignToTeam(" ")
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> incident.assignToUser(" ")
+        );
     }
 
     @Test

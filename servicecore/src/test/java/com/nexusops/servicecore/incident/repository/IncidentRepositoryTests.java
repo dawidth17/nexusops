@@ -16,6 +16,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DataJpaTest
@@ -59,6 +60,8 @@ class IncidentRepositoryTests {
         assertEquals(Urgency.HIGH, loadedIncident.getUrgency());
         assertEquals(Priority.P1, loadedIncident.getPriority());
         assertEquals(IncidentStatus.OPEN, loadedIncident.getStatus());
+        assertNull(loadedIncident.getAssigneeId());
+        assertNull(loadedIncident.getTeamId());
     }
 
     @Test
@@ -91,5 +94,52 @@ class IncidentRepositoryTests {
                 loadedIncident.getUpdatedAt()
                         .compareTo(loadedIncident.getCreatedAt()) >= 0
         );
+    }
+
+    @Test
+    void persistsAssignmentChanges() {
+        Incident incident = Incident.create(
+                "Network connectivity issue",
+                "Several users cannot access internal services",
+                Impact.MEDIUM,
+                Urgency.MEDIUM
+        );
+
+        Incident savedIncident = incidentRepository.saveAndFlush(incident);
+        UUID incidentId = savedIncident.getId();
+
+        savedIncident.assignToTeam("network-operations");
+        savedIncident.assignToUser("user-123");
+
+        incidentRepository.saveAndFlush(savedIncident);
+
+        entityManager.clear();
+
+        Incident assignedIncident = incidentRepository
+                .findById(incidentId)
+                .orElseThrow();
+
+        assertEquals(
+                "network-operations",
+                assignedIncident.getTeamId()
+        );
+        assertEquals(
+                "user-123",
+                assignedIncident.getAssigneeId()
+        );
+
+        assignedIncident.clearTeam();
+        assignedIncident.clearAssignee();
+
+        incidentRepository.saveAndFlush(assignedIncident);
+
+        entityManager.clear();
+
+        Incident unassignedIncident = incidentRepository
+                .findById(incidentId)
+                .orElseThrow();
+
+        assertNull(unassignedIncident.getTeamId());
+        assertNull(unassignedIncident.getAssigneeId());
     }
 }

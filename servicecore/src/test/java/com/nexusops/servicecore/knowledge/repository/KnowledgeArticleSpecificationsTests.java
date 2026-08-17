@@ -20,6 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @AutoConfigureTestDatabase(replace = Replace.NONE)
 class KnowledgeArticleSpecificationsTests {
 
+    private static final String UNIQUE_SEARCH_TERM =
+            "spec-knowledge-only-8f3a";
+
     @Autowired
     private KnowledgeArticleRepository repository;
 
@@ -28,30 +31,39 @@ class KnowledgeArticleSpecificationsTests {
 
     @BeforeEach
     void createArticles() {
-        KnowledgeArticle vpn =
+        KnowledgeArticle networkArticle =
                 KnowledgeArticle.create(
-                        "GlobalProtect VPN troubleshooting",
-                        "NETWORK",
-                        "Restart GlobalProtect.",
-                        "user-123",
-                        LocalDate.of(2026, 9, 1)
+                        "Network guide "
+                                + UNIQUE_SEARCH_TERM,
+                        "SPEC_NETWORK",
+                        "Unique troubleshooting procedure.",
+                        "spec-user-123",
+                        LocalDate.of(
+                                2026,
+                                9,
+                                1
+                        )
                 );
 
-        vpn.publish();
+        networkArticle.publish();
 
-        KnowledgeArticle laptop =
+        KnowledgeArticle hardwareArticle =
                 KnowledgeArticle.create(
-                        "Laptop startup troubleshooting",
-                        "HARDWARE",
+                        "Hardware startup guide",
+                        "SPEC_HARDWARE",
                         "Check the charger and power state.",
-                        "user-456",
-                        LocalDate.of(2027, 1, 1)
+                        "spec-user-456",
+                        LocalDate.of(
+                                2027,
+                                1,
+                                1
+                        )
                 );
 
         repository.saveAll(
                 List.of(
-                        vpn,
-                        laptop
+                        networkArticle,
+                        hardwareArticle
                 )
         );
 
@@ -73,18 +85,23 @@ class KnowledgeArticleSpecificationsTests {
                         .and(
                                 KnowledgeArticleSpecifications
                                         .hasCategory(
-                                                "network"
+                                                "spec_network"
                                         )
                         );
 
         List<KnowledgeArticle> articles =
                 repository.findAll(specification);
 
-        assertEquals(1, articles.size());
+        assertEquals(
+                1,
+                articles.size()
+        );
 
         assertEquals(
-                "GlobalProtect VPN troubleshooting",
-                articles.getFirst().getTitle()
+                "Network guide "
+                        + UNIQUE_SEARCH_TERM,
+                articles.getFirst()
+                        .getTitle()
         );
     }
 
@@ -94,27 +111,51 @@ class KnowledgeArticleSpecificationsTests {
                 repository.findAll(
                         KnowledgeArticleSpecifications
                                 .containsText(
-                                        "globalprotect"
+                                        UNIQUE_SEARCH_TERM
                                 )
                 );
 
-        assertEquals(1, articles.size());
+        assertEquals(
+                1,
+                articles.size()
+        );
+
+        assertEquals(
+                "Network guide "
+                        + UNIQUE_SEARCH_TERM,
+                articles.getFirst()
+                        .getTitle()
+        );
     }
 
     @Test
     void findsArticlesDueForReview() {
-        List<KnowledgeArticle> articles =
-                repository.findAll(
-                        KnowledgeArticleSpecifications
-                                .reviewDueBy(
-                                        LocalDate.of(
-                                                2026,
-                                                10,
-                                                1
+        Specification<KnowledgeArticle> specification =
+                Specification
+                        .<KnowledgeArticle>unrestricted()
+                        .and(
+                                KnowledgeArticleSpecifications
+                                        .hasCategory(
+                                                "SPEC_NETWORK"
                                         )
-                                )
-                );
+                        )
+                        .and(
+                                KnowledgeArticleSpecifications
+                                        .reviewDueBy(
+                                                LocalDate.of(
+                                                        2026,
+                                                        10,
+                                                        1
+                                                )
+                                        )
+                        );
 
-        assertEquals(1, articles.size());
+        List<KnowledgeArticle> articles =
+                repository.findAll(specification);
+
+        assertEquals(
+                1,
+                articles.size()
+        );
     }
 }

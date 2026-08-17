@@ -1,0 +1,200 @@
+name: ServiceCore CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "servicecore/**"
+      - ".github/workflows/servicecore-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "servicecore/**"
+      - ".github/workflows/servicecore-ci.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: servicecore-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  verify:
+    name: Build, test and quality
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: servicecore/pom.xml
+
+      - name: Verify ServiceCore
+        working-directory: servicecore
+        run: |
+          ./mvnw \
+            --batch-mode \
+            --no-transfer-progress \
+            clean verify
+
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: servicecore/pom.xml
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build ServiceCore for CodeQL
+        working-directory: servicecore
+        run: |
+          ./mvnw \
+            --batch-mode \
+            --no-transfer-progress \
+            -DskipTests \
+            package
+
+      - name: Analyze ServiceCore
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:java-kotlin/servicecore"
+
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    needs:
+      - verify
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build ServiceCore image
+        run: |
+          docker build \
+            --tag nexusops-servicecore:${{ github.sha }} \
+            servicecore
+
+      - name: Create smoke test network
+        run: |
+          docker network create servicecore-ci
+
+      - name: Start PostgreSQL
+        run: |
+          docker run \
+            --detach \
+            --name servicecore-ci-db \
+            --network servicecore-ci \
+            --env POSTGRES_DB=servicecore \
+            --env POSTGRES_USER=servicecore \
+            --env POSTGRES_PASSWORD=servicecore_test_password \
+            --health-cmd="pg_isready -U servicecore -d servicecore" \
+            --health-interval=2s \
+            --health-timeout=5s \
+            --health-retries=30 \
+            postgres:18.4
+
+      - name: Wait for PostgreSQL
+        run: |
+          for attempt in {1..30}; do
+            status="$(docker inspect \
+              --format='{{.State.Health.Status}}' \
+              servicecore-ci-db)"
+
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs servicecore-ci-db
+          exit 1
+
+      - name: Start ServiceCore
+        run: |
+          docker run \
+            --detach \
+            --name servicecore-ci-app \
+            --network servicecore-ci \
+            --publish 18080:8080 \
+            --env SPRING_PROFILES_ACTIVE=dev \
+            --env SERVICECORE_DB_HOST=servicecore-ci-db \
+            --env SERVICECORE_DB_PORT=5432 \
+            --env SERVICECORE_DB_NAME=servicecore \
+            --env SERVICECORE_DB_USER=servicecore \
+            --env SERVICECORE_DB_PASSWORD=servicecore_test_password \
+            nexusops-servicecore:${{ github.sha }}
+
+      - name: Smoke test ServiceCore
+        run: |
+          for attempt in {1..45}; do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://localhost:18080/actuator/health
+            then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs servicecore-ci-app
+          exit 1
+
+      - name: Scan ServiceCore image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: nexusops-servicecore:${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Show ServiceCore logs
+        if: failure()
+        run: |
+          docker logs servicecore-ci-app || true
+
+      - name: Clean up containers
+        if: always()
+        run: |
+          docker rm -f servicecore-ci-app || true
+          docker rm -f servicecore-ci-db || true
+          docker network rm servicecore-ci || true

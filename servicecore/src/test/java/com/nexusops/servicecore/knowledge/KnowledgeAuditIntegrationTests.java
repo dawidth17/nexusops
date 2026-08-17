@@ -234,7 +234,7 @@ class KnowledgeAuditIntegrationTests {
         );
 
         assertEquals(
-                "system",
+                "dev-user",
                 archiveEntry.getActorId()
         );
     }

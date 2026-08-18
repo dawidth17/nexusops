@@ -4,22 +4,34 @@
 
 TEST(SysprobeVersionTests, exposesExpectedMajorVersion)
 {
-    EXPECT_EQ(sysprobe_version_major(), 0);
+    EXPECT_EQ(
+        sysprobe_version_major(),
+        0
+    );
 }
 
 TEST(SysprobeVersionTests, exposesExpectedMinorVersion)
 {
-    EXPECT_EQ(sysprobe_version_minor(), 1);
+    EXPECT_EQ(
+        sysprobe_version_minor(),
+        2
+    );
 }
 
 TEST(SysprobeVersionTests, exposesExpectedPatchVersion)
 {
-    EXPECT_EQ(sysprobe_version_patch(), 0);
+    EXPECT_EQ(
+        sysprobe_version_patch(),
+        0
+    );
 }
 
 TEST(SysprobeStatusTests, successCodeIsZero)
 {
-    EXPECT_EQ(SYSPROBE_OK, 0);
+    EXPECT_EQ(
+        SYSPROBE_OK,
+        0
+    );
 }
 
 TEST(SysprobeStatusTests, errorCodesAreDistinct)

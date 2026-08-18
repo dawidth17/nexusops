@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -25,6 +25,10 @@ add_library(
     sysprobe
     STATIC
     src/sysprobe.c
+    src/cpu_collector.c
+    src/memory_collector.c
+    src/filesystem_collector.c
+    src/uptime_collector.c
 )
 
 target_include_directories(
@@ -76,6 +80,23 @@ if(SENTINEL_BUILD_TESTS)
     add_executable(
         sysprobe_tests
         tests/sysprobe_tests.cpp
+        tests/cpu_collector_tests.cpp
+        tests/memory_collector_tests.cpp
+        tests/filesystem_collector_tests.cpp
+        tests/uptime_collector_tests.cpp
+    )
+
+    target_include_directories(
+        sysprobe_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+
+    target_compile_definitions(
+        sysprobe_tests
+        PRIVATE
+            SYSPROBE_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
 
     target_link_libraries(

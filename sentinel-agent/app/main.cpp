@@ -140,6 +140,124 @@ bool readProcesses(
     return false;
 }
 
+bool readNetworkInterfaces(
+    std::vector<sysprobe_network_interface> &interfaces
+)
+{
+    size_t count = 0;
+
+    sysprobe_status status =
+        sysprobe_read_network_interfaces(
+            nullptr,
+            0,
+            &count
+        );
+
+    if (status != SYSPROBE_OK) {
+        return false;
+    }
+
+    interfaces.resize(count);
+
+    for (
+        int attempt = 0;
+        attempt < 3;
+        ++attempt
+    ) {
+        size_t actualCount = 0;
+
+        status =
+            sysprobe_read_network_interfaces(
+                interfaces.data(),
+                interfaces.size(),
+                &actualCount
+            );
+
+        if (
+            status ==
+            SYSPROBE_ERROR_BUFFER_TOO_SMALL
+        ) {
+            interfaces.resize(
+                actualCount
+            );
+
+            continue;
+        }
+
+        if (status != SYSPROBE_OK) {
+            return false;
+        }
+
+        interfaces.resize(
+            actualCount
+        );
+
+        return true;
+    }
+
+    return false;
+}
+
+bool readProcesses(
+    std::vector<sysprobe_process_info> &processes
+)
+{
+    size_t count = 0;
+
+    sysprobe_status status =
+        sysprobe_read_processes(
+            nullptr,
+            0,
+            &count
+        );
+
+    if (status != SYSPROBE_OK) {
+        return false;
+    }
+
+    processes.resize(
+        count + 16
+    );
+
+    for (
+        int attempt = 0;
+        attempt < 3;
+        ++attempt
+    ) {
+        size_t actualCount = 0;
+
+        status =
+            sysprobe_read_processes(
+                processes.data(),
+                processes.size(),
+                &actualCount
+            );
+
+        if (
+            status ==
+            SYSPROBE_ERROR_BUFFER_TOO_SMALL
+        ) {
+            processes.resize(
+                actualCount + 16
+            );
+
+            continue;
+        }
+
+        if (status != SYSPROBE_OK) {
+            return false;
+        }
+
+        processes.resize(
+            actualCount
+        );
+
+        return true;
+    }
+
+    return false;
+}
+
 }
 
 int main()

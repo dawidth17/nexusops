@@ -1,0 +1,67 @@
+name: Sentinel CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "sentinel-agent/**"
+      - ".github/workflows/sentinel-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "sentinel-agent/**"
+      - ".github/workflows/sentinel-ci.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: sentinel-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build
+
+      - name: Configure SentinelAgent
+        run: |
+          cmake \
+            -S sentinel-agent \
+            -B sentinel-agent/build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSENTINEL_BUILD_TESTS=ON
+
+      - name: Build SentinelAgent
+        run: |
+          cmake \
+            --build sentinel-agent/build \
+            --parallel
+
+      - name: Run tests
+        run: |
+          ctest \
+            --test-dir sentinel-agent/build \
+            --output-on-failure
+
+      - name: Run SentinelAgent
+        run: |
+          ./sentinel-agent/build/sentinel-agent

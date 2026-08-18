@@ -5,7 +5,7 @@ SentinelAgent is the Linux monitoring agent used by NexusOps.
 The project is split into two main parts:
 
 - `libsysprobe` - a C17 library for low-level Linux system data collection
-- `sentinel-agent` - a C++20 application that handles agent orchestration
+- `sentinel-agent` - a C++20 application for scheduling, concurrency and agent orchestration
 
 ## Current collectors
 
@@ -32,6 +32,28 @@ Process snapshots currently include:
 Processes that disappear or become unreadable during a snapshot are skipped instead of causing the full collection to fail.
 
 The collectors do not execute shell commands to obtain core metrics.
+
+## Concurrency
+
+The C++ runtime contains a fixed-size thread pool with a bounded work queue.
+
+The scheduler submits periodic collector tasks to the pool.
+
+The work queue is bounded so slow collectors cannot cause unlimited memory growth.
+
+Submission is non-blocking:
+
+- accepted work is queued for a worker
+- a full queue returns `queue_full`
+- a stopped pool rejects new work
+
+The scheduler records rejected submissions as backpressure.
+
+Missed periodic intervals are skipped instead of being submitted as a large catch-up burst.
+
+Shutdown stops the scheduler first and then drains already accepted thread-pool work before joining the worker threads.
+
+The current executable runs the scheduler for a short demonstration and exits. Long-running service lifecycle and signal handling are added in a later milestone.
 
 ## Requirements
 
@@ -69,15 +91,25 @@ ctest \
   --output-on-failure
 ```
 
+The test suite covers the Linux collectors, bounded queue behavior, thread-pool shutdown, task exceptions, periodic scheduling and scheduler backpressure.
+
 ## Run
 
 ```bash
 ./sentinel-agent/build/sentinel-agent
 ```
 
-The output contains host CPU, memory, filesystem, uptime, network interface and process snapshot data.
+The executable schedules the system, network and process collectors on the bounded thread pool.
 
-## Manual comparison
+A final runtime summary includes:
+
+- worker count
+- work queue capacity
+- number of collector runs
+- dropped scheduler submissions
+- collector errors
+
+## Manual collector comparison
 
 The collected values can be compared with Linux system sources:
 

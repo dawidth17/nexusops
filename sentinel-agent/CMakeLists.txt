@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -19,6 +19,11 @@ option(
     SENTINEL_BUILD_TESTS
     "Build SentinelAgent tests"
     ON
+)
+
+find_package(
+    Threads
+    REQUIRED
 )
 
 add_library(
@@ -47,6 +52,33 @@ target_compile_options(
         -Wpedantic
 )
 
+add_library(
+    sentinel_runtime
+    STATIC
+    src/bounded_thread_pool.cpp
+    src/scheduler.cpp
+)
+
+target_include_directories(
+    sentinel_runtime
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(
+    sentinel_runtime
+    PUBLIC
+        Threads::Threads
+)
+
+target_compile_options(
+    sentinel_runtime
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
+
 add_executable(
     sentinel-agent
     app/main.cpp
@@ -56,6 +88,13 @@ target_link_libraries(
     sentinel-agent
     PRIVATE
         sysprobe
+        sentinel_runtime
+)
+
+target_compile_definitions(
+    sentinel-agent
+    PRIVATE
+        SENTINEL_AGENT_VERSION="${PROJECT_VERSION}"
 )
 
 target_compile_options(
@@ -118,9 +157,34 @@ if(SENTINEL_BUILD_TESTS)
             -Wpedantic
     )
 
+    add_executable(
+        sentinel_runtime_tests
+        tests/bounded_thread_pool_tests.cpp
+        tests/scheduler_tests.cpp
+    )
+
+    target_link_libraries(
+        sentinel_runtime_tests
+        PRIVATE
+            sentinel_runtime
+            GTest::gtest_main
+    )
+
+    target_compile_options(
+        sentinel_runtime_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
     include(GoogleTest)
 
     gtest_discover_tests(
         sysprobe_tests
+    )
+
+    gtest_discover_tests(
+        sentinel_runtime_tests
     )
 endif()

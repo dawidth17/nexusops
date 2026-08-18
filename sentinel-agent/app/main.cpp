@@ -1,38 +1,28 @@
+#include "nexusops/agent/bounded_thread_pool.h"
+#include "nexusops/agent/scheduler.h"
 #include "nexusops/sysprobe.h"
 
-#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 
 namespace {
 
-bool isSuccess(
-    sysprobe_status status,
-    const char *collectorName
-)
-{
-    if (status == SYSPROBE_OK) {
-        return true;
-    }
-
-    std::cerr
-        << "collector failed: "
-        << collectorName
-        << ", status="
-        << static_cast<int>(status)
-        << '\n';
-
-    return false;
-}
+using nexusops::agent::BoundedThreadPool;
+using nexusops::agent::Scheduler;
 
 bool readNetworkInterfaces(
-    std::vector<sysprobe_network_interface> &interfaces
+    std::vector<
+        sysprobe_network_interface
+    > &interfaces
 )
 {
-    size_t count = 0;
+    std::size_t count = 0;
 
     sysprobe_status status =
         sysprobe_read_network_interfaces(
@@ -45,14 +35,16 @@ bool readNetworkInterfaces(
         return false;
     }
 
-    interfaces.resize(count);
+    interfaces.resize(
+        count + 4
+    );
 
     for (
         int attempt = 0;
         attempt < 3;
         ++attempt
     ) {
-        size_t actualCount = 0;
+        std::size_t actualCount = 0;
 
         status =
             sysprobe_read_network_interfaces(
@@ -66,7 +58,7 @@ bool readNetworkInterfaces(
             SYSPROBE_ERROR_BUFFER_TOO_SMALL
         ) {
             interfaces.resize(
-                actualCount
+                actualCount + 4
             );
 
             continue;
@@ -87,10 +79,12 @@ bool readNetworkInterfaces(
 }
 
 bool readProcesses(
-    std::vector<sysprobe_process_info> &processes
+    std::vector<
+        sysprobe_process_info
+    > &processes
 )
 {
-    size_t count = 0;
+    std::size_t count = 0;
 
     sysprobe_status status =
         sysprobe_read_processes(
@@ -104,7 +98,7 @@ bool readProcesses(
     }
 
     processes.resize(
-        count + 16
+        count + 32
     );
 
     for (
@@ -112,7 +106,7 @@ bool readProcesses(
         attempt < 3;
         ++attempt
     ) {
-        size_t actualCount = 0;
+        std::size_t actualCount = 0;
 
         status =
             sysprobe_read_processes(
@@ -126,7 +120,7 @@ bool readProcesses(
             SYSPROBE_ERROR_BUFFER_TOO_SMALL
         ) {
             processes.resize(
-                actualCount + 16
+                actualCount + 32
             );
 
             continue;
@@ -151,7 +145,9 @@ bool readProcesses(
 int main()
 {
     std::cout
-        << "SentinelAgent using libsysprobe "
+        << "SentinelAgent "
+        << SENTINEL_AGENT_VERSION
+        << " using libsysprobe "
         << sysprobe_version_major()
         << '.'
         << sysprobe_version_minor()
@@ -159,219 +155,258 @@ int main()
         << sysprobe_version_patch()
         << '\n';
 
-    sysprobe_cpu_times firstCpu{};
-    sysprobe_cpu_times secondCpu{};
+    constexpr std::size_t workerCount = 3;
+    constexpr std::size_t queueCapacity = 8;
+
+    BoundedThreadPool threadPool(
+        workerCount,
+        queueCapacity
+    );
+
+    Scheduler scheduler(
+        threadPool
+    );
+
+    std::mutex outputMutex;
+    std::mutex cpuMutex;
+
+    std::atomic<std::size_t>
+        collectionErrors{0};
+
+    std::atomic<std::size_t>
+        systemRuns{0};
+
+    std::atomic<std::size_t>
+        networkRuns{0};
+
+    std::atomic<std::size_t>
+        processRuns{0};
+
+    sysprobe_cpu_times previousCpu{};
 
     if (
-        !isSuccess(
-            sysprobe_read_cpu_times(
-                &firstCpu
-            ),
-            "cpu"
-        )
+        sysprobe_read_cpu_times(
+            &previousCpu
+        ) != SYSPROBE_OK
     ) {
+        std::cerr
+            << "failed to read initial cpu snapshot\n";
+
+        return 1;
+    }
+
+    const auto systemResult =
+        scheduler.schedulePeriodic(
+            "system",
+            std::chrono::milliseconds(400),
+            [&]() {
+                sysprobe_cpu_times currentCpu{};
+
+                sysprobe_memory_info memory{};
+
+                sysprobe_filesystem_info
+                    filesystem{};
+
+                sysprobe_uptime_info uptime{};
+
+                if (
+                    sysprobe_read_cpu_times(
+                        &currentCpu
+                    ) != SYSPROBE_OK ||
+                    sysprobe_read_memory_info(
+                        &memory
+                    ) != SYSPROBE_OK ||
+                    sysprobe_read_filesystem_info(
+                        "/",
+                        &filesystem
+                    ) != SYSPROBE_OK ||
+                    sysprobe_read_uptime(
+                        &uptime
+                    ) != SYSPROBE_OK
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
+                double cpuUsagePercent = 0.0;
+
+                {
+                    std::lock_guard lock(
+                        cpuMutex
+                    );
+
+                    if (
+                        sysprobe_calculate_cpu_usage_percent(
+                            &previousCpu,
+                            &currentCpu,
+                            &cpuUsagePercent
+                        ) != SYSPROBE_OK
+                    ) {
+                        previousCpu =
+                            currentCpu;
+
+                        ++collectionErrors;
+
+                        return;
+                    }
+
+                    previousCpu =
+                        currentCpu;
+                }
+
+                {
+                    std::lock_guard lock(
+                        outputMutex
+                    );
+
+                    std::cout
+                        << std::fixed
+                        << std::setprecision(2)
+                        << "system cpu_usage_percent="
+                        << cpuUsagePercent
+                        << " memory_used_bytes="
+                        << memory.used_bytes
+                        << " filesystem_used_bytes="
+                        << filesystem.used_bytes
+                        << " uptime_seconds="
+                        << uptime.uptime_seconds
+                        << '\n';
+                }
+
+                ++systemRuns;
+            },
+            false
+        );
+
+    const auto networkResult =
+        scheduler.schedulePeriodic(
+            "network",
+            std::chrono::milliseconds(600),
+            [&]() {
+                std::vector<
+                    sysprobe_network_interface
+                > interfaces;
+
+                if (
+                    !readNetworkInterfaces(
+                        interfaces
+                    )
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
+                {
+                    std::lock_guard lock(
+                        outputMutex
+                    );
+
+                    std::cout
+                        << "network interfaces="
+                        << interfaces.size();
+
+                    if (!interfaces.empty()) {
+                        std::cout
+                            << " first="
+                            << interfaces.front().name
+                            << " rx_bytes="
+                            << interfaces.front().rx_bytes
+                            << " tx_bytes="
+                            << interfaces.front().tx_bytes;
+                    }
+
+                    std::cout << '\n';
+                }
+
+                ++networkRuns;
+            },
+            true
+        );
+
+    const auto processResult =
+        scheduler.schedulePeriodic(
+            "processes",
+            std::chrono::milliseconds(800),
+            [&]() {
+                std::vector<
+                    sysprobe_process_info
+                > processes;
+
+                if (
+                    !readProcesses(
+                        processes
+                    )
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
+                {
+                    std::lock_guard lock(
+                        outputMutex
+                    );
+
+                    std::cout
+                        << "processes count="
+                        << processes.size()
+                        << '\n';
+                }
+
+                ++processRuns;
+            },
+            true
+        );
+
+    if (
+        systemResult !=
+            Scheduler::ScheduleResult::scheduled ||
+        networkResult !=
+            Scheduler::ScheduleResult::scheduled ||
+        processResult !=
+            Scheduler::ScheduleResult::scheduled
+    ) {
+        std::cerr
+            << "failed to register scheduled jobs\n";
+
+        return 1;
+    }
+
+    if (!scheduler.start()) {
+        std::cerr
+            << "failed to start scheduler\n";
+
         return 1;
     }
 
     std::this_thread::sleep_for(
-        std::chrono::milliseconds(500)
+        std::chrono::milliseconds(1300)
     );
 
-    if (
-        !isSuccess(
-            sysprobe_read_cpu_times(
-                &secondCpu
-            ),
-            "cpu"
-        )
-    ) {
-        return 1;
-    }
+    scheduler.stop();
 
-    double cpuUsagePercent = 0.0;
-
-    if (
-        !isSuccess(
-            sysprobe_calculate_cpu_usage_percent(
-                &firstCpu,
-                &secondCpu,
-                &cpuUsagePercent
-            ),
-            "cpu"
-        )
-    ) {
-        return 1;
-    }
-
-    sysprobe_memory_info memory{};
-
-    if (
-        !isSuccess(
-            sysprobe_read_memory_info(
-                &memory
-            ),
-            "memory"
-        )
-    ) {
-        return 1;
-    }
-
-    sysprobe_filesystem_info filesystem{};
-
-    if (
-        !isSuccess(
-            sysprobe_read_filesystem_info(
-                "/",
-                &filesystem
-            ),
-            "filesystem"
-        )
-    ) {
-        return 1;
-    }
-
-    sysprobe_uptime_info uptime{};
-
-    if (
-        !isSuccess(
-            sysprobe_read_uptime(
-                &uptime
-            ),
-            "uptime"
-        )
-    ) {
-        return 1;
-    }
-
-    std::vector<
-        sysprobe_network_interface
-    > interfaces;
-
-    if (!readNetworkInterfaces(interfaces)) {
-        std::cerr
-            << "collector failed: network\n";
-
-        return 1;
-    }
-
-    std::vector<
-        sysprobe_process_info
-    > processes;
-
-    if (!readProcesses(processes)) {
-        std::cerr
-            << "collector failed: processes\n";
-
-        return 1;
-    }
+    threadPool.stop();
 
     std::cout
-        << std::fixed
-        << std::setprecision(2);
-
-    std::cout
-        << "cpu_usage_percent="
-        << cpuUsagePercent
+        << "runtime worker_count="
+        << threadPool.workerCount()
+        << " queue_capacity="
+        << threadPool.queueCapacity()
+        << " system_runs="
+        << systemRuns.load()
+        << " network_runs="
+        << networkRuns.load()
+        << " process_runs="
+        << processRuns.load()
+        << " dropped_submissions="
+        << scheduler.droppedSubmissionCount()
+        << " collection_errors="
+        << collectionErrors.load()
         << '\n';
 
-    std::cout
-        << "memory_total_bytes="
-        << memory.total_bytes
-        << '\n';
-
-    std::cout
-        << "memory_available_bytes="
-        << memory.available_bytes
-        << '\n';
-
-    std::cout
-        << "memory_used_bytes="
-        << memory.used_bytes
-        << '\n';
-
-    std::cout
-        << "filesystem_total_bytes="
-        << filesystem.total_bytes
-        << '\n';
-
-    std::cout
-        << "filesystem_available_bytes="
-        << filesystem.available_bytes
-        << '\n';
-
-    std::cout
-        << "filesystem_used_bytes="
-        << filesystem.used_bytes
-        << '\n';
-
-    std::cout
-        << "uptime_seconds="
-        << uptime.uptime_seconds
-        << '\n';
-
-    std::cout
-        << "network_interface_count="
-        << interfaces.size()
-        << '\n';
-
-    for (
-        const auto &interface :
-        interfaces
-    ) {
-        std::cout
-            << "interface="
-            << interface.name
-            << " ipv4="
-            << (
-                interface.ipv4_address[0] != '\0'
-                    ? interface.ipv4_address
-                    : "-"
-            )
-            << " ipv6="
-            << (
-                interface.ipv6_address[0] != '\0'
-                    ? interface.ipv6_address
-                    : "-"
-            )
-            << " rx_bytes="
-            << interface.rx_bytes
-            << " tx_bytes="
-            << interface.tx_bytes
-            << '\n';
-    }
-
-    std::cout
-        << "process_count="
-        << processes.size()
-        << '\n';
-
-    size_t visibleProcessCount =
-        std::min<size_t>(
-            processes.size(),
-            5
-        );
-
-    for (
-        size_t index = 0;
-        index < visibleProcessCount;
-        ++index
-    ) {
-        const auto &process =
-            processes[index];
-
-        std::cout
-            << "process pid="
-            << process.pid
-            << " ppid="
-            << process.parent_pid
-            << " state="
-            << process.state
-            << " rss_bytes="
-            << process.resident_memory_bytes
-            << " name="
-            << process.name
-            << '\n';
-    }
-
-    return 0;
+    return collectionErrors.load() == 0
+        ? 0
+        : 1;
 }

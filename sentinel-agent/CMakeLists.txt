@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -29,6 +29,8 @@ add_library(
     src/memory_collector.c
     src/filesystem_collector.c
     src/uptime_collector.c
+    src/network_collector.c
+    src/process_collector.c
 )
 
 target_include_directories(
@@ -84,6 +86,8 @@ if(SENTINEL_BUILD_TESTS)
         tests/memory_collector_tests.cpp
         tests/filesystem_collector_tests.cpp
         tests/uptime_collector_tests.cpp
+        tests/network_collector_tests.cpp
+        tests/process_collector_tests.cpp
     )
 
     target_include_directories(

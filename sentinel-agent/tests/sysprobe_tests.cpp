@@ -14,7 +14,7 @@ TEST(SysprobeVersionTests, exposesExpectedMinorVersion)
 {
     EXPECT_EQ(
         sysprobe_version_minor(),
-        2
+        3
     );
 }
 
@@ -47,7 +47,7 @@ TEST(SysprobeStatusTests, errorCodesAreDistinct)
     );
 
     EXPECT_NE(
-        SYSPROBE_ERROR_INVALID_ARGUMENT,
-        SYSPROBE_ERROR_PARSE
+        SYSPROBE_ERROR_PARSE,
+        SYSPROBE_ERROR_BUFFER_TOO_SMALL
     );
 }

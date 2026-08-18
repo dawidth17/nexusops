@@ -15,8 +15,21 @@ The current version collects:
 - memory totals and available memory from `/proc/meminfo`
 - filesystem capacity through `statvfs()`
 - system uptime from `/proc/uptime`
+- network traffic counters from `/proc/net/dev`
+- IPv4 and IPv6 interface addresses through `getifaddrs()`
+- process snapshots from `/proc/<pid>/status`
 
 CPU usage is calculated from the difference between two CPU counter snapshots.
+
+Process snapshots currently include:
+
+- PID
+- parent PID
+- process name
+- process state
+- resident memory when available
+
+Processes that disappear or become unreadable during a snapshot are skipped instead of causing the full collection to fail.
 
 The collectors do not execute shell commands to obtain core metrics.
 
@@ -62,31 +75,19 @@ ctest \
 ./sentinel-agent/build/sentinel-agent
 ```
 
-Example output:
-
-```text
-SentinelAgent using libsysprobe 0.2.0
-cpu_usage_percent=3.42
-memory_total_bytes=...
-memory_available_bytes=...
-memory_used_bytes=...
-filesystem_total_bytes=...
-filesystem_available_bytes=...
-filesystem_used_bytes=...
-uptime_seconds=...
-```
-
-Values depend on the Linux host at the time of collection.
+The output contains host CPU, memory, filesystem, uptime, network interface and process snapshot data.
 
 ## Manual comparison
 
-The collected values can be compared with the host sources and standard Linux tools:
+The collected values can be compared with Linux system sources:
 
 ```bash
 head -n 1 /proc/stat
 grep -E 'MemTotal|MemAvailable' /proc/meminfo
 df -B1 /
 cat /proc/uptime
+cat /proc/net/dev
+cat /proc/self/status
 ```
 
 CPU percentages may differ slightly from other tools because sampling intervals are not necessarily identical.

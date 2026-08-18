@@ -1,9 +1,11 @@
 #include "nexusops/sysprobe.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -22,6 +24,124 @@ bool isSuccess(
         << ", status="
         << static_cast<int>(status)
         << '\n';
+
+    return false;
+}
+
+bool readNetworkInterfaces(
+    std::vector<sysprobe_network_interface> &interfaces
+)
+{
+    size_t count = 0;
+
+    sysprobe_status status =
+        sysprobe_read_network_interfaces(
+            nullptr,
+            0,
+            &count
+        );
+
+    if (status != SYSPROBE_OK) {
+        return false;
+    }
+
+    interfaces.resize(count);
+
+    for (
+        int attempt = 0;
+        attempt < 3;
+        ++attempt
+    ) {
+        size_t actualCount = 0;
+
+        status =
+            sysprobe_read_network_interfaces(
+                interfaces.data(),
+                interfaces.size(),
+                &actualCount
+            );
+
+        if (
+            status ==
+            SYSPROBE_ERROR_BUFFER_TOO_SMALL
+        ) {
+            interfaces.resize(
+                actualCount
+            );
+
+            continue;
+        }
+
+        if (status != SYSPROBE_OK) {
+            return false;
+        }
+
+        interfaces.resize(
+            actualCount
+        );
+
+        return true;
+    }
+
+    return false;
+}
+
+bool readProcesses(
+    std::vector<sysprobe_process_info> &processes
+)
+{
+    size_t count = 0;
+
+    sysprobe_status status =
+        sysprobe_read_processes(
+            nullptr,
+            0,
+            &count
+        );
+
+    if (status != SYSPROBE_OK) {
+        return false;
+    }
+
+    processes.resize(
+        count + 16
+    );
+
+    for (
+        int attempt = 0;
+        attempt < 3;
+        ++attempt
+    ) {
+        size_t actualCount = 0;
+
+        status =
+            sysprobe_read_processes(
+                processes.data(),
+                processes.size(),
+                &actualCount
+            );
+
+        if (
+            status ==
+            SYSPROBE_ERROR_BUFFER_TOO_SMALL
+        ) {
+            processes.resize(
+                actualCount + 16
+            );
+
+            continue;
+        }
+
+        if (status != SYSPROBE_OK) {
+            return false;
+        }
+
+        processes.resize(
+            actualCount
+        );
+
+        return true;
+    }
 
     return false;
 }
@@ -123,6 +243,28 @@ int main()
         return 1;
     }
 
+    std::vector<
+        sysprobe_network_interface
+    > interfaces;
+
+    if (!readNetworkInterfaces(interfaces)) {
+        std::cerr
+            << "collector failed: network\n";
+
+        return 1;
+    }
+
+    std::vector<
+        sysprobe_process_info
+    > processes;
+
+    if (!readProcesses(processes)) {
+        std::cerr
+            << "collector failed: processes\n";
+
+        return 1;
+    }
+
     std::cout
         << std::fixed
         << std::setprecision(2);
@@ -166,6 +308,70 @@ int main()
         << "uptime_seconds="
         << uptime.uptime_seconds
         << '\n';
+
+    std::cout
+        << "network_interface_count="
+        << interfaces.size()
+        << '\n';
+
+    for (
+        const auto &interface :
+        interfaces
+    ) {
+        std::cout
+            << "interface="
+            << interface.name
+            << " ipv4="
+            << (
+                interface.ipv4_address[0] != '\0'
+                    ? interface.ipv4_address
+                    : "-"
+            )
+            << " ipv6="
+            << (
+                interface.ipv6_address[0] != '\0'
+                    ? interface.ipv6_address
+                    : "-"
+            )
+            << " rx_bytes="
+            << interface.rx_bytes
+            << " tx_bytes="
+            << interface.tx_bytes
+            << '\n';
+    }
+
+    std::cout
+        << "process_count="
+        << processes.size()
+        << '\n';
+
+    size_t visibleProcessCount =
+        std::min<size_t>(
+            processes.size(),
+            5
+        );
+
+    for (
+        size_t index = 0;
+        index < visibleProcessCount;
+        ++index
+    ) {
+        const auto &process =
+            processes[index];
+
+        std::cout
+            << "process pid="
+            << process.pid
+            << " ppid="
+            << process.parent_pid
+            << " state="
+            << process.state
+            << " rss_bytes="
+            << process.resident_memory_bytes
+            << " name="
+            << process.name
+            << '\n';
+    }
 
     return 0;
 }

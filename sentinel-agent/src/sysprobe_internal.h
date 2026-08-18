@@ -22,6 +22,25 @@ sysprobe_status sysprobe_read_uptime_from_path(
     sysprobe_uptime_info *uptime
 );
 
+sysprobe_status sysprobe_read_network_counters_from_path(
+    const char *path,
+    sysprobe_network_interface *interfaces,
+    size_t capacity,
+    size_t *count
+);
+
+sysprobe_status sysprobe_read_process_status_from_path(
+    const char *path,
+    sysprobe_process_info *process
+);
+
+sysprobe_status sysprobe_read_processes_from_root(
+    const char *proc_root,
+    sysprobe_process_info *processes,
+    size_t capacity,
+    size_t *count
+);
+
 #ifdef __cplusplus
 }
 #endif

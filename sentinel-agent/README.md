@@ -2,10 +2,11 @@
 
 SentinelAgent is the Linux monitoring agent used by NexusOps.
 
-The project is split into two main parts:
+The project is split into three main parts:
 
 - `libsysprobe` - a C17 library for low-level Linux system data collection
-- `sentinel-agent` - a C++20 application for scheduling, concurrency and agent orchestration
+- `sentinel_runtime` - C++20 scheduling and concurrency
+- `sentinel_storage` - C++20 SQLite durable telemetry buffering
 
 ## Current collectors
 
@@ -21,14 +22,6 @@ The current version collects:
 
 CPU usage is calculated from the difference between two CPU counter snapshots.
 
-Process snapshots currently include:
-
-- PID
-- parent PID
-- process name
-- process state
-- resident memory when available
-
 Processes that disappear or become unreadable during a snapshot are skipped instead of causing the full collection to fail.
 
 The collectors do not execute shell commands to obtain core metrics.
@@ -39,7 +32,7 @@ The C++ runtime contains a fixed-size thread pool with a bounded work queue.
 
 The scheduler submits periodic collector tasks to the pool.
 
-The work queue is bounded so slow collectors cannot cause unlimited memory growth.
+The work queue is bounded so slow collectors cannot cause unlimited in-memory growth.
 
 Submission is non-blocking:
 
@@ -53,7 +46,36 @@ Missed periodic intervals are skipped instead of being submitted as a large catc
 
 Shutdown stops the scheduler first and then drains already accepted thread-pool work before joining the worker threads.
 
-The current executable runs the scheduler for a short demonstration and exits. Long-running service lifecycle and signal handling are added in a later milestone.
+## SQLite durable spool
+
+Collected telemetry can be stored in a local SQLite spool.
+
+Each stored record contains:
+
+- an increasing sequence number
+- UTC capture time
+- telemetry kind
+- an opaque payload
+
+Records are read in sequence order.
+
+Acknowledgement removes all records up to and including an acknowledged sequence number.
+
+The spool has a fixed record capacity and a maximum payload size so offline buffering cannot grow without an explicit bound.
+
+The SQLite connection is protected by a mutex so collector tasks can write through the same spool safely.
+
+The current schema is versioned through SQLite `user_version`.
+
+Schema version 1 creates the `telemetry_spool` table.
+
+SQLite uses WAL journaling with full synchronous durability for the local spool.
+
+Until the real telemetry transport is implemented, the executable uses the spool as a local telemetry sink.
+
+The demo closes and reopens the database to verify that telemetry remains available before acknowledgement.
+
+The temporary demo database is removed when the executable exits.
 
 ## Requirements
 
@@ -61,6 +83,7 @@ The current executable runs the scheduler for a short demonstration and exits. L
 - GCC or Clang
 - CMake 3.28+
 - Ninja
+- SQLite 3 development library
 
 ## Configure
 
@@ -91,7 +114,20 @@ ctest \
   --output-on-failure
 ```
 
-The test suite covers the Linux collectors, bounded queue behavior, thread-pool shutdown, task exceptions, periodic scheduling and scheduler backpressure.
+The test suite covers:
+
+- Linux collectors
+- bounded queue behavior
+- thread-pool shutdown
+- task exceptions
+- periodic scheduling
+- scheduler backpressure
+- SQLite schema creation
+- ordered spool reads
+- spool capacity
+- acknowledgement
+- persistence across reopen
+- concurrent spool writes
 
 ## Run
 
@@ -99,15 +135,11 @@ The test suite covers the Linux collectors, bounded queue behavior, thread-pool 
 ./sentinel-agent/build/sentinel-agent
 ```
 
-The executable schedules the system, network and process collectors on the bounded thread pool.
+The executable schedules the system, network and process collectors on the bounded thread pool and persists the generated telemetry into SQLite.
 
-A final runtime summary includes:
+The runtime summary includes collector counts, scheduler backpressure, spool records and storage errors.
 
-- worker count
-- work queue capacity
-- number of collector runs
-- dropped scheduler submissions
-- collector errors
+A second summary verifies that the same records can be read after the database is closed and reopened.
 
 ## Manual collector comparison
 

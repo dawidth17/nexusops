@@ -28,6 +28,7 @@ jobs:
           pkg-config --version
           sqlite3 --version
           pkg-config --modversion sqlite3
+          systemd-analyze --version
 
       - name: Configure SentinelAgent
         run: |
@@ -52,4 +53,43 @@ jobs:
 
       - name: Run SentinelAgent
         run: |
-          ./sentinel-agent/build/sentinel-agent
+          NEXUSOPS_SENTINEL_SPOOL_PATH="$RUNNER_TEMP/sentinel-ci.db" \
+            ./sentinel-agent/build/sentinel-agent \
+            --run-seconds 2
+
+      - name: Test graceful SIGTERM
+        run: |
+          log_file="$RUNNER_TEMP/sentinel-sigterm.log"
+          spool_file="$RUNNER_TEMP/sentinel-sigterm.db"
+
+          NEXUSOPS_SENTINEL_SPOOL_PATH="$spool_file" \
+            ./sentinel-agent/build/sentinel-agent \
+            >"$log_file" 2>&1 &
+
+          agent_pid=$!
+
+          sleep 2
+
+          kill -TERM "$agent_pid"
+
+          wait "$agent_pid"
+
+          cat "$log_file"
+
+          grep -q \
+            "shutdown_requested signal=SIGTERM" \
+            "$log_file"
+
+          grep -q \
+            "graceful_shutdown=true" \
+            "$log_file"
+
+      - name: Verify systemd unit
+        run: |
+          sudo install \
+            -m 0755 \
+            sentinel-agent/build/sentinel-agent \
+            /usr/bin/nexusops-sentinel-agent
+
+          systemd-analyze verify \
+            sentinel-agent/packaging/systemd/nexusops-sentinel.service

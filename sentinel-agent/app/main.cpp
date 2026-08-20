@@ -1,69 +1,230 @@
 #include "nexusops/agent/bounded_thread_pool.h"
 #include "nexusops/agent/scheduler.h"
+#include "nexusops/agent/signal_waiter.h"
 #include "nexusops/agent/sqlite_spool.h"
 #include "nexusops/sysprobe.h"
 
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <ctime>
 #include <exception>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
-#include <unistd.h>
+#include <signal.h>
 
 namespace {
 
 using nexusops::agent::BoundedThreadPool;
 using nexusops::agent::Scheduler;
+using nexusops::agent::SignalEventType;
+using nexusops::agent::SignalWaiter;
 using nexusops::agent::SQLiteSpool;
 using nexusops::agent::SpoolStatus;
-using nexusops::agent::TelemetryRecord;
 
-class SpoolFileCleanup {
-public:
-    explicit SpoolFileCleanup(
-        std::string path
-    )
-        : path_(std::move(path))
-    {
-    }
-
-    ~SpoolFileCleanup()
-    {
-        std::error_code error;
-
-        std::filesystem::remove(
-            path_,
-            error
-        );
-
-        error.clear();
-
-        std::filesystem::remove(
-            path_ + "-wal",
-            error
-        );
-
-        error.clear();
-
-        std::filesystem::remove(
-            path_ + "-shm",
-            error
-        );
-    }
-
-private:
-    std::string path_;
+struct RuntimeOptions {
+    std::optional<
+        std::chrono::seconds
+    > runDuration;
 };
+
+struct StopRequest {
+    std::string reason;
+    int signalNumber{0};
+    std::size_t reloadRequests{0};
+};
+
+RuntimeOptions parseOptions(
+    int argc,
+    char **argv
+)
+{
+    RuntimeOptions options;
+
+    for (
+        int index = 1;
+        index < argc;
+        ++index
+    ) {
+        const std::string_view argument(
+            argv[index]
+        );
+
+        if (
+            argument ==
+            "--run-seconds"
+        ) {
+            if (
+                index + 1 >=
+                argc
+            ) {
+                throw std::invalid_argument(
+                    "--run-seconds requires a value"
+                );
+            }
+
+            const std::string_view value(
+                argv[++index]
+            );
+
+            long long seconds = 0;
+
+            const auto result =
+                std::from_chars(
+                    value.data(),
+                    value.data() +
+                        value.size(),
+                    seconds
+                );
+
+            if (
+                result.ec !=
+                    std::errc{} ||
+                result.ptr !=
+                    value.data() +
+                        value.size() ||
+                seconds <= 0 ||
+                seconds > 86400
+            ) {
+                throw std::invalid_argument(
+                    "--run-seconds must be between 1 and 86400"
+                );
+            }
+
+            options.runDuration =
+                std::chrono::seconds(
+                    seconds
+                );
+
+            continue;
+        }
+
+        throw std::invalid_argument(
+            "unknown argument: " +
+            std::string(argument)
+        );
+    }
+
+    return options;
+}
+
+std::string resolveSpoolPath()
+{
+    const char *configuredPath =
+        std::getenv(
+            "NEXUSOPS_SENTINEL_SPOOL_PATH"
+        );
+
+    if (
+        configuredPath != nullptr &&
+        configuredPath[0] != '\0'
+    ) {
+        return configuredPath;
+    }
+
+    const char *xdgStateHome =
+        std::getenv(
+            "XDG_STATE_HOME"
+        );
+
+    if (
+        xdgStateHome != nullptr &&
+        xdgStateHome[0] != '\0'
+    ) {
+        return (
+            std::filesystem::path(
+                xdgStateHome
+            ) /
+            "nexusops-sentinel" /
+            "telemetry.db"
+        ).string();
+    }
+
+    const char *home =
+        std::getenv(
+            "HOME"
+        );
+
+    if (
+        home != nullptr &&
+        home[0] != '\0'
+    ) {
+        return (
+            std::filesystem::path(
+                home
+            ) /
+            ".local" /
+            "state" /
+            "nexusops-sentinel" /
+            "telemetry.db"
+        ).string();
+    }
+
+    return
+        "/tmp/nexusops-sentinel-telemetry.db";
+}
+
+void ensureSpoolDirectory(
+    const std::string &spoolPath
+)
+{
+    const std::filesystem::path path(
+        spoolPath
+    );
+
+    const auto parent =
+        path.parent_path();
+
+    if (parent.empty()) {
+        return;
+    }
+
+    std::error_code error;
+
+    std::filesystem::create_directories(
+        parent,
+        error
+    );
+
+    if (error) {
+        throw std::runtime_error(
+            "failed to create spool directory: " +
+            error.message()
+        );
+    }
+}
+
+const char *signalName(
+    int signalNumber
+)
+{
+    switch (signalNumber) {
+        case SIGTERM:
+            return "SIGTERM";
+
+        case SIGINT:
+            return "SIGINT";
+
+        case SIGHUP:
+            return "SIGHUP";
+
+        default:
+            return "UNKNOWN";
+    }
+}
 
 std::string utcNow()
 {
@@ -320,18 +481,157 @@ std::string buildProcessPayload(
     return payload.str();
 }
 
-int runDemo(
+StopRequest waitForStop(
+    SignalWaiter &signalWaiter,
+    const RuntimeOptions &options,
+    std::mutex &outputMutex
+)
+{
+    StopRequest request;
+
+    if (!options.runDuration.has_value()) {
+        for (;;) {
+            const auto event =
+                signalWaiter.wait();
+
+            if (
+                event.type ==
+                SignalEventType::reload
+            ) {
+                ++request.reloadRequests;
+
+                std::lock_guard lock(
+                    outputMutex
+                );
+
+                std::cout
+                    << "lifecycle reload_requested signal="
+                    << signalName(
+                        event.signalNumber
+                    )
+                    << '\n';
+
+                continue;
+            }
+
+            request.reason =
+                "signal";
+
+            request.signalNumber =
+                event.signalNumber;
+
+            return request;
+        }
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        options.runDuration.value();
+
+    for (;;) {
+        const auto now =
+            std::chrono::steady_clock::now();
+
+        if (now >= deadline) {
+            request.reason =
+                "runtime_limit";
+
+            return request;
+        }
+
+        const auto remaining =
+            std::chrono::duration_cast<
+                std::chrono::milliseconds
+            >(
+                deadline - now
+            );
+
+        if (
+            remaining <=
+            std::chrono::milliseconds::zero()
+        ) {
+            request.reason =
+                "runtime_limit";
+
+            return request;
+        }
+
+        const auto event =
+            signalWaiter.waitFor(
+                remaining
+            );
+
+        if (
+            event.type ==
+            SignalEventType::timeout
+        ) {
+            request.reason =
+                "runtime_limit";
+
+            return request;
+        }
+
+        if (
+            event.type ==
+            SignalEventType::reload
+        ) {
+            ++request.reloadRequests;
+
+            std::lock_guard lock(
+                outputMutex
+            );
+
+            std::cout
+                << "lifecycle reload_requested signal="
+                << signalName(
+                    event.signalNumber
+                )
+                << '\n';
+
+            continue;
+        }
+
+        request.reason =
+            "signal";
+
+        request.signalNumber =
+            event.signalNumber;
+
+        return request;
+    }
+}
+
+int runAgent(
+    const RuntimeOptions &options,
+    SignalWaiter &signalWaiter,
     const std::string &spoolPath
 )
 {
-    constexpr std::size_t
-        workerCount = 3;
+    constexpr std::size_t workerCount =
+        3;
 
-    constexpr std::size_t
-        queueCapacity = 8;
+    constexpr std::size_t queueCapacity =
+        8;
 
-    constexpr std::size_t
-        maxSpoolRecords = 4096;
+    constexpr std::size_t maxSpoolRecords =
+        100000;
+
+    SQLiteSpool spool(
+        spoolPath,
+        maxSpoolRecords
+    );
+
+    BoundedThreadPool threadPool(
+        workerCount,
+        queueCapacity
+    );
+
+    Scheduler scheduler(
+        threadPool
+    );
+
+    std::mutex outputMutex;
+    std::mutex cpuMutex;
 
     std::atomic<std::size_t>
         collectionErrors{0};
@@ -351,447 +651,358 @@ int runDemo(
     std::atomic<std::size_t>
         processRuns{0};
 
-    std::size_t
-        recordsBeforeReopen = 0;
+    sysprobe_cpu_times previousCpu{};
 
-    {
-        SQLiteSpool spool(
-            spoolPath,
-            maxSpoolRecords
-        );
+    if (
+        sysprobe_read_cpu_times(
+            &previousCpu
+        ) != SYSPROBE_OK
+    ) {
+        std::cerr
+            << "failed to read initial cpu snapshot\n";
 
-        BoundedThreadPool threadPool(
-            workerCount,
-            queueCapacity
-        );
+        return 1;
+    }
 
-        Scheduler scheduler(
-            threadPool
-        );
+    const auto systemResult =
+        scheduler.schedulePeriodic(
+            "system",
+            std::chrono::seconds(5),
+            [&]() {
+                sysprobe_cpu_times
+                    currentCpu{};
 
-        std::mutex outputMutex;
-        std::mutex cpuMutex;
+                sysprobe_memory_info
+                    memory{};
 
-        sysprobe_cpu_times
-            previousCpu{};
+                sysprobe_filesystem_info
+                    filesystem{};
 
-        if (
-            sysprobe_read_cpu_times(
-                &previousCpu
-            ) != SYSPROBE_OK
-        ) {
-            std::cerr
-                << "failed to read initial cpu snapshot\n";
+                sysprobe_uptime_info
+                    uptime{};
 
-            return 1;
-        }
+                if (
+                    sysprobe_read_cpu_times(
+                        &currentCpu
+                    ) != SYSPROBE_OK ||
+                    sysprobe_read_memory_info(
+                        &memory
+                    ) != SYSPROBE_OK ||
+                    sysprobe_read_filesystem_info(
+                        "/",
+                        &filesystem
+                    ) != SYSPROBE_OK ||
+                    sysprobe_read_uptime(
+                        &uptime
+                    ) != SYSPROBE_OK
+                ) {
+                    ++collectionErrors;
 
-        const auto systemResult =
-            scheduler.schedulePeriodic(
-                "system",
-                std::chrono::
-                    milliseconds(400),
-                [&]() {
-                    sysprobe_cpu_times
-                        currentCpu{};
+                    return;
+                }
 
-                    sysprobe_memory_info
-                        memory{};
+                double cpuUsagePercent =
+                    0.0;
 
-                    sysprobe_filesystem_info
-                        filesystem{};
-
-                    sysprobe_uptime_info
-                        uptime{};
+                {
+                    std::lock_guard lock(
+                        cpuMutex
+                    );
 
                     if (
-                        sysprobe_read_cpu_times(
-                            &currentCpu
-                        ) != SYSPROBE_OK ||
-                        sysprobe_read_memory_info(
-                            &memory
-                        ) != SYSPROBE_OK ||
-                        sysprobe_read_filesystem_info(
-                            "/",
-                            &filesystem
-                        ) != SYSPROBE_OK ||
-                        sysprobe_read_uptime(
-                            &uptime
+                        sysprobe_calculate_cpu_usage_percent(
+                            &previousCpu,
+                            &currentCpu,
+                            &cpuUsagePercent
                         ) != SYSPROBE_OK
                     ) {
-                        ++collectionErrors;
-
-                        return;
-                    }
-
-                    double cpuUsagePercent =
-                        0.0;
-
-                    {
-                        std::lock_guard lock(
-                            cpuMutex
-                        );
-
-                        if (
-                            sysprobe_calculate_cpu_usage_percent(
-                                &previousCpu,
-                                &currentCpu,
-                                &cpuUsagePercent
-                            ) != SYSPROBE_OK
-                        ) {
-                            previousCpu =
-                                currentCpu;
-
-                            ++collectionErrors;
-
-                            return;
-                        }
-
                         previousCpu =
                             currentCpu;
-                    }
 
-                    persistTelemetry(
-                        spool,
-                        "system",
-                        buildSystemPayload(
-                            cpuUsagePercent,
-                            memory,
-                            filesystem,
-                            uptime
-                        ),
-                        spoolFullCount,
-                        spoolErrorCount
-                    );
-
-                    {
-                        std::lock_guard lock(
-                            outputMutex
-                        );
-
-                        std::cout
-                            << std::fixed
-                            << std::setprecision(2)
-                            << "system cpu_usage_percent="
-                            << cpuUsagePercent
-                            << " memory_used_bytes="
-                            << memory.used_bytes
-                            << " filesystem_used_bytes="
-                            << filesystem.used_bytes
-                            << " uptime_seconds="
-                            << uptime.uptime_seconds
-                            << '\n';
-                    }
-
-                    ++systemRuns;
-                },
-                false
-            );
-
-        const auto networkResult =
-            scheduler.schedulePeriodic(
-                "network",
-                std::chrono::
-                    milliseconds(600),
-                [&]() {
-                    std::vector<
-                        sysprobe_network_interface
-                    > interfaces;
-
-                    if (
-                        !readNetworkInterfaces(
-                            interfaces
-                        )
-                    ) {
                         ++collectionErrors;
 
                         return;
                     }
 
-                    persistTelemetry(
-                        spool,
-                        "network",
-                        buildNetworkPayload(
-                            interfaces
-                        ),
-                        spoolFullCount,
-                        spoolErrorCount
+                    previousCpu =
+                        currentCpu;
+                }
+
+                persistTelemetry(
+                    spool,
+                    "system",
+                    buildSystemPayload(
+                        cpuUsagePercent,
+                        memory,
+                        filesystem,
+                        uptime
+                    ),
+                    spoolFullCount,
+                    spoolErrorCount
+                );
+
+                {
+                    std::lock_guard lock(
+                        outputMutex
                     );
 
-                    {
-                        std::lock_guard lock(
-                            outputMutex
-                        );
+                    std::cout
+                        << std::fixed
+                        << std::setprecision(2)
+                        << "system cpu_usage_percent="
+                        << cpuUsagePercent
+                        << " memory_used_bytes="
+                        << memory.used_bytes
+                        << " filesystem_used_bytes="
+                        << filesystem.used_bytes
+                        << " uptime_seconds="
+                        << uptime.uptime_seconds
+                        << '\n';
+                }
 
-                        std::cout
-                            << "network interfaces="
-                            << interfaces.size();
-
-                        if (
-                            !interfaces.empty()
-                        ) {
-                            std::cout
-                                << " first="
-                                << interfaces.front().
-                                    name
-                                << " rx_bytes="
-                                << interfaces.front().
-                                    rx_bytes
-                                << " tx_bytes="
-                                << interfaces.front().
-                                    tx_bytes;
-                        }
-
-                        std::cout
-                            << '\n';
-                    }
-
-                    ++networkRuns;
-                },
-                true
-            );
-
-        const auto processResult =
-            scheduler.schedulePeriodic(
-                "processes",
-                std::chrono::
-                    milliseconds(800),
-                [&]() {
-                    std::vector<
-                        sysprobe_process_info
-                    > processes;
-
-                    if (
-                        !readProcesses(
-                            processes
-                        )
-                    ) {
-                        ++collectionErrors;
-
-                        return;
-                    }
-
-                    persistTelemetry(
-                        spool,
-                        "processes",
-                        buildProcessPayload(
-                            processes
-                        ),
-                        spoolFullCount,
-                        spoolErrorCount
-                    );
-
-                    {
-                        std::lock_guard lock(
-                            outputMutex
-                        );
-
-                        std::cout
-                            << "processes count="
-                            << processes.size()
-                            << '\n';
-                    }
-
-                    ++processRuns;
-                },
-                true
-            );
-
-        if (
-            systemResult !=
-                Scheduler::
-                    ScheduleResult::
-                    scheduled ||
-            networkResult !=
-                Scheduler::
-                    ScheduleResult::
-                    scheduled ||
-            processResult !=
-                Scheduler::
-                    ScheduleResult::
-                    scheduled
-        ) {
-            std::cerr
-                << "failed to register scheduled jobs\n";
-
-            return 1;
-        }
-
-        if (!scheduler.start()) {
-            std::cerr
-                << "failed to start scheduler\n";
-
-            return 1;
-        }
-
-        std::this_thread::sleep_for(
-            std::chrono::
-                milliseconds(1300)
+                ++systemRuns;
+            },
+            false
         );
 
-        scheduler.stop();
+    const auto networkResult =
+        scheduler.schedulePeriodic(
+            "network",
+            std::chrono::seconds(10),
+            [&]() {
+                std::vector<
+                    sysprobe_network_interface
+                > interfaces;
 
-        threadPool.stop();
+                if (
+                    !readNetworkInterfaces(
+                        interfaces
+                    )
+                ) {
+                    ++collectionErrors;
 
-        if (
-            spool.count(
-                recordsBeforeReopen
-            ) != SpoolStatus::ok
-        ) {
-            std::cerr
-                << "failed to count spool records: "
-                << spool.lastError()
-                << '\n';
+                    return;
+                }
 
-            return 1;
-        }
+                persistTelemetry(
+                    spool,
+                    "network",
+                    buildNetworkPayload(
+                        interfaces
+                    ),
+                    spoolFullCount,
+                    spoolErrorCount
+                );
+
+                {
+                    std::lock_guard lock(
+                        outputMutex
+                    );
+
+                    std::cout
+                        << "network interfaces="
+                        << interfaces.size()
+                        << '\n';
+                }
+
+                ++networkRuns;
+            },
+            true
+        );
+
+    const auto processResult =
+        scheduler.schedulePeriodic(
+            "processes",
+            std::chrono::seconds(15),
+            [&]() {
+                std::vector<
+                    sysprobe_process_info
+                > processes;
+
+                if (
+                    !readProcesses(
+                        processes
+                    )
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
+                persistTelemetry(
+                    spool,
+                    "processes",
+                    buildProcessPayload(
+                        processes
+                    ),
+                    spoolFullCount,
+                    spoolErrorCount
+                );
+
+                {
+                    std::lock_guard lock(
+                        outputMutex
+                    );
+
+                    std::cout
+                        << "processes count="
+                        << processes.size()
+                        << '\n';
+                }
+
+                ++processRuns;
+            },
+            true
+        );
+
+    if (
+        systemResult !=
+            Scheduler::ScheduleResult::scheduled ||
+        networkResult !=
+            Scheduler::ScheduleResult::scheduled ||
+        processResult !=
+            Scheduler::ScheduleResult::scheduled
+    ) {
+        std::cerr
+            << "failed to register scheduled jobs\n";
+
+        return 1;
+    }
+
+    if (!scheduler.start()) {
+        std::cerr
+            << "failed to start scheduler\n";
+
+        return 1;
+    }
+
+    {
+        std::lock_guard lock(
+            outputMutex
+        );
 
         std::cout
-            << "runtime worker_count="
-            << threadPool.workerCount()
-            << " queue_capacity="
-            << threadPool.queueCapacity()
-            << " system_runs="
-            << systemRuns.load()
-            << " network_runs="
-            << networkRuns.load()
-            << " process_runs="
-            << processRuns.load()
-            << " dropped_submissions="
-            << scheduler.
-                droppedSubmissionCount()
-            << " collection_errors="
-            << collectionErrors.load()
-            << " spool_records="
-            << recordsBeforeReopen
-            << " spool_full="
-            << spoolFullCount.load()
-            << " spool_errors="
-            << spoolErrorCount.load()
+            << "lifecycle state=running"
+            << " spool_path="
+            << spoolPath
             << '\n';
     }
 
-    std::size_t
-        reopenedCount = 0;
-
-    std::size_t
-        acknowledgedCount = 0;
-
-    std::size_t
-        remainingCount = 0;
-
-    {
-        SQLiteSpool reopenedSpool(
-            spoolPath,
-            maxSpoolRecords
+    const StopRequest stopRequest =
+        waitForStop(
+            signalWaiter,
+            options,
+            outputMutex
         );
 
-        if (
-            reopenedSpool.count(
-                reopenedCount
-            ) != SpoolStatus::ok
-        ) {
-            std::cerr
-                << "failed to count reopened spool\n";
+    if (
+        stopRequest.reason ==
+        "signal"
+    ) {
+        std::lock_guard lock(
+            outputMutex
+        );
 
-            return 1;
-        }
+        std::cout
+            << "lifecycle shutdown_requested signal="
+            << signalName(
+                stopRequest.signalNumber
+            )
+            << '\n';
+    } else {
+        std::lock_guard lock(
+            outputMutex
+        );
 
-        std::vector<
-            TelemetryRecord
-        > records;
+        std::cout
+            << "lifecycle runtime_limit_reached"
+            << '\n';
+    }
 
-        if (reopenedCount > 0) {
-            if (
-                reopenedSpool.peekOldest(
-                    maxSpoolRecords,
-                    records
-                ) != SpoolStatus::ok
-            ) {
-                std::cerr
-                    << "failed to read reopened spool\n";
+    scheduler.stop();
 
-                return 1;
-            }
+    threadPool.stop();
 
-            if (!records.empty()) {
-                if (
-                    reopenedSpool.
-                        acknowledgeThrough(
-                            records.back().
-                                sequence,
-                            acknowledgedCount
-                        ) != SpoolStatus::ok
-                ) {
-                    std::cerr
-                        << "failed to acknowledge spool records\n";
+    std::size_t spoolRecords = 0;
 
-                    return 1;
-                }
-            }
-        }
+    if (
+        spool.count(
+            spoolRecords
+        ) != SpoolStatus::ok
+    ) {
+        std::cerr
+            << "failed to count spool records: "
+            << spool.lastError()
+            << '\n';
 
-        if (
-            reopenedSpool.count(
-                remainingCount
-            ) != SpoolStatus::ok
-        ) {
-            std::cerr
-                << "failed to count remaining spool records\n";
-
-            return 1;
-        }
+        return 1;
     }
 
     std::cout
-        << "spool persisted_records="
-        << reopenedCount
-        << " acknowledged_records="
-        << acknowledgedCount
-        << " remaining_records="
-        << remainingCount
+        << "runtime worker_count="
+        << threadPool.workerCount()
+        << " queue_capacity="
+        << threadPool.queueCapacity()
+        << " system_runs="
+        << systemRuns.load()
+        << " network_runs="
+        << networkRuns.load()
+        << " process_runs="
+        << processRuns.load()
+        << " dropped_submissions="
+        << scheduler.droppedSubmissionCount()
+        << " collection_errors="
+        << collectionErrors.load()
+        << " spool_records="
+        << spoolRecords
+        << " spool_full="
+        << spoolFullCount.load()
+        << " spool_errors="
+        << spoolErrorCount.load()
         << '\n';
 
-    if (
-        reopenedCount !=
-        recordsBeforeReopen
-    ) {
-        return 1;
-    }
-
-    if (
-        remainingCount != 0
-    ) {
-        return 1;
-    }
-
-    if (
-        collectionErrors.load() != 0 ||
-        spoolFullCount.load() != 0 ||
-        spoolErrorCount.load() != 0
-    ) {
-        return 1;
-    }
+    std::cout
+        << "lifecycle graceful_shutdown=true"
+        << " stop_reason="
+        << stopRequest.reason
+        << " signal="
+        << (
+            stopRequest.signalNumber == 0
+                ? "none"
+                : signalName(
+                    stopRequest.signalNumber
+                )
+        )
+        << " reload_requests="
+        << stopRequest.reloadRequests
+        << '\n';
 
     return 0;
 }
 
 }
 
-int main()
+int main(
+    int argc,
+    char **argv
+)
 {
-    const std::string spoolPath =
-        "/tmp/nexusops-sentinel-spool-" +
-        std::to_string(
-            getpid()
-        ) +
-        ".db";
-
-    SpoolFileCleanup cleanup(
-        spoolPath
-    );
-
     try {
+        const RuntimeOptions options =
+            parseOptions(
+                argc,
+                argv
+            );
+
+        SignalWaiter signalWaiter;
+
+        const std::string spoolPath =
+            resolveSpoolPath();
+
+        ensureSpoolDirectory(
+            spoolPath
+        );
+
         std::cout
             << "SentinelAgent "
             << SENTINEL_AGENT_VERSION
@@ -803,7 +1014,9 @@ int main()
             << sysprobe_version_patch()
             << '\n';
 
-        return runDemo(
+        return runAgent(
+            options,
+            signalWaiter,
             spoolPath
         );
     } catch (

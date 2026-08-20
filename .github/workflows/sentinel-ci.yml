@@ -25,6 +25,9 @@ jobs:
           g++ --version
           cmake --version
           ninja --version
+          pkg-config --version
+          sqlite3 --version
+          pkg-config --modversion sqlite3
 
       - name: Configure SentinelAgent
         run: |

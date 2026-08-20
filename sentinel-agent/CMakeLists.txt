@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -23,6 +23,11 @@ option(
 
 find_package(
     Threads
+    REQUIRED
+)
+
+find_package(
+    SQLite3
     REQUIRED
 )
 
@@ -79,6 +84,32 @@ target_compile_options(
         -Wpedantic
 )
 
+add_library(
+    sentinel_storage
+    STATIC
+    src/sqlite_spool.cpp
+)
+
+target_include_directories(
+    sentinel_storage
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(
+    sentinel_storage
+    PUBLIC
+        SQLite::SQLite3
+)
+
+target_compile_options(
+    sentinel_storage
+    PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
+
 add_executable(
     sentinel-agent
     app/main.cpp
@@ -89,6 +120,7 @@ target_link_libraries(
     PRIVATE
         sysprobe
         sentinel_runtime
+        sentinel_storage
 )
 
 target_compile_definitions(
@@ -178,6 +210,27 @@ if(SENTINEL_BUILD_TESTS)
             -Wpedantic
     )
 
+    add_executable(
+        sentinel_storage_tests
+        tests/sqlite_spool_tests.cpp
+    )
+
+    target_link_libraries(
+        sentinel_storage_tests
+        PRIVATE
+            sentinel_storage
+            Threads::Threads
+            GTest::gtest_main
+    )
+
+    target_compile_options(
+        sentinel_storage_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
     include(GoogleTest)
 
     gtest_discover_tests(
@@ -186,5 +239,9 @@ if(SENTINEL_BUILD_TESTS)
 
     gtest_discover_tests(
         sentinel_runtime_tests
+    )
+
+    gtest_discover_tests(
+        sentinel_storage_tests
     )
 endif()

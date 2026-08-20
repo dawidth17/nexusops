@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.5.0
+    VERSION 0.6.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -62,6 +62,7 @@ add_library(
     STATIC
     src/bounded_thread_pool.cpp
     src/scheduler.cpp
+    src/signal_waiter.cpp
 )
 
 target_include_directories(
@@ -193,6 +194,7 @@ if(SENTINEL_BUILD_TESTS)
         sentinel_runtime_tests
         tests/bounded_thread_pool_tests.cpp
         tests/scheduler_tests.cpp
+        tests/signal_waiter_tests.cpp
     )
 
     target_link_libraries(

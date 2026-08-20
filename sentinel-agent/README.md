@@ -5,7 +5,7 @@ SentinelAgent is the Linux monitoring agent used by NexusOps.
 The project is split into three main parts:
 
 - `libsysprobe` - a C17 library for low-level Linux system data collection
-- `sentinel_runtime` - C++20 scheduling and concurrency
+- `sentinel_runtime` - C++20 scheduling, concurrency and lifecycle handling
 - `sentinel_storage` - C++20 SQLite durable telemetry buffering
 
 ## Current collectors
@@ -20,10 +20,6 @@ The current version collects:
 - IPv4 and IPv6 interface addresses through `getifaddrs()`
 - process snapshots from `/proc/<pid>/status`
 
-CPU usage is calculated from the difference between two CPU counter snapshots.
-
-Processes that disappear or become unreadable during a snapshot are skipped instead of causing the full collection to fail.
-
 The collectors do not execute shell commands to obtain core metrics.
 
 ## Concurrency
@@ -32,50 +28,79 @@ The C++ runtime contains a fixed-size thread pool with a bounded work queue.
 
 The scheduler submits periodic collector tasks to the pool.
 
-The work queue is bounded so slow collectors cannot cause unlimited in-memory growth.
+The bounded queue prevents unlimited in-memory growth when work is produced faster than workers can process it.
 
-Submission is non-blocking:
-
-- accepted work is queued for a worker
-- a full queue returns `queue_full`
-- a stopped pool rejects new work
-
-The scheduler records rejected submissions as backpressure.
-
-Missed periodic intervals are skipped instead of being submitted as a large catch-up burst.
-
-Shutdown stops the scheduler first and then drains already accepted thread-pool work before joining the worker threads.
+Missed scheduler intervals are skipped instead of being submitted as a large catch-up burst.
 
 ## SQLite durable spool
 
-Collected telemetry can be stored in a local SQLite spool.
+Collected telemetry is stored in a local SQLite spool.
 
-Each stored record contains:
+Each record contains:
 
 - an increasing sequence number
 - UTC capture time
 - telemetry kind
-- an opaque payload
+- telemetry payload
 
-Records are read in sequence order.
+The SQLite schema is versioned.
 
-Acknowledgement removes all records up to and including an acknowledged sequence number.
+The spool has bounded record and payload limits.
 
-The spool has a fixed record capacity and a maximum payload size so offline buffering cannot grow without an explicit bound.
+The connection is protected by a mutex so collector workers can safely share the spool.
 
-The SQLite connection is protected by a mutex so collector tasks can write through the same spool safely.
+Telemetry remains stored across agent restarts until a later transport milestone acknowledges it.
 
-The current schema is versioned through SQLite `user_version`.
+## Lifecycle and signals
 
-Schema version 1 creates the `telemetry_spool` table.
+SentinelAgent can now run as a long-lived Linux service.
 
-SQLite uses WAL journaling with full synchronous durability for the local spool.
+Lifecycle signals are blocked before worker threads are created and consumed synchronously by the main control thread.
 
-Until the real telemetry transport is implemented, the executable uses the spool as a local telemetry sink.
+The agent handles:
 
-The demo closes and reopens the database to verify that telemetry remains available before acknowledgement.
+- `SIGTERM` as a graceful shutdown request
+- `SIGINT` as a graceful shutdown request
+- `SIGHUP` as a reload request
 
-The temporary demo database is removed when the executable exits.
+A reload request currently keeps the agent running and records the lifecycle event. Reloadable configuration will be connected when configuration state requires it.
+
+Graceful shutdown happens in this order:
+
+```text
+shutdown signal
+    |
+    v
+stop scheduler
+    |
+    v
+drain bounded thread pool
+    |
+    v
+finish SQLite operations
+    |
+    v
+close database and exit
+```
+
+No complex C++ or SQLite work is executed from an asynchronous signal handler.
+
+## Local state
+
+The spool path is resolved in this order:
+
+```text
+NEXUSOPS_SENTINEL_SPOOL_PATH
+XDG_STATE_HOME
+HOME/.local/state/nexusops-sentinel
+/tmp fallback
+```
+
+The systemd service explicitly stores the spool at:
+
+```text
+/var/lib/nexusops-sentinel/telemetry.db
+```
 
 ## Requirements
 
@@ -84,6 +109,7 @@ The temporary demo database is removed when the executable exits.
 - CMake 3.28+
 - Ninja
 - SQLite 3 development library
+- pthreads
 
 ## Configure
 
@@ -114,32 +140,38 @@ ctest \
   --output-on-failure
 ```
 
-The test suite covers:
+The test suite covers collectors, concurrency, scheduler backpressure, SQLite persistence and lifecycle signal handling.
 
-- Linux collectors
-- bounded queue behavior
-- thread-pool shutdown
-- task exceptions
-- periodic scheduling
-- scheduler backpressure
-- SQLite schema creation
-- ordered spool reads
-- spool capacity
-- acknowledgement
-- persistence across reopen
-- concurrent spool writes
+## Run interactively
 
-## Run
+Without a runtime limit, the agent continues until it receives a shutdown signal:
 
 ```bash
 ./sentinel-agent/build/sentinel-agent
 ```
 
-The executable schedules the system, network and process collectors on the bounded thread pool and persists the generated telemetry into SQLite.
+Pressing `Ctrl+C` sends `SIGINT` and triggers graceful shutdown.
 
-The runtime summary includes collector counts, scheduler backpressure, spool records and storage errors.
+For CI or a short local demonstration:
 
-A second summary verifies that the same records can be read after the database is closed and reopened.
+```bash
+./sentinel-agent/build/sentinel-agent \
+  --run-seconds 5
+```
+
+## systemd
+
+The repository contains:
+
+```text
+packaging/systemd/nexusops-sentinel.service
+```
+
+The unit uses a dynamic service user and a persistent systemd state directory.
+
+The final Debian package will install the unit automatically.
+
+For a development smoke test, the built binary and unit can be installed manually.
 
 ## Manual collector comparison
 
@@ -153,5 +185,3 @@ cat /proc/uptime
 cat /proc/net/dev
 cat /proc/self/status
 ```
-
-CPU percentages may differ slightly from other tools because sampling intervals are not necessarily identical.

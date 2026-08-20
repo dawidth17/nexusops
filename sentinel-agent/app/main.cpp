@@ -1,4 +1,5 @@
 #include "nexusops/agent/bounded_thread_pool.h"
+#include "nexusops/agent/diagnostic_cli.h"
 #include "nexusops/agent/scheduler.h"
 #include "nexusops/agent/signal_waiter.h"
 #include "nexusops/agent/sqlite_spool.h"
@@ -21,7 +22,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include <signal.h>
@@ -43,7 +43,9 @@ struct RuntimeOptions {
 
 struct StopRequest {
     std::string reason;
+
     int signalNumber{0};
+
     std::size_t reloadRequests{0};
 };
 
@@ -607,14 +609,14 @@ int runAgent(
     const std::string &spoolPath
 )
 {
-    constexpr std::size_t workerCount =
-        3;
+    constexpr std::size_t
+        workerCount = 3;
 
-    constexpr std::size_t queueCapacity =
-        8;
+    constexpr std::size_t
+        queueCapacity = 8;
 
-    constexpr std::size_t maxSpoolRecords =
-        100000;
+    constexpr std::size_t
+        maxSpoolRecords = 100000;
 
     SQLiteSpool spool(
         spoolPath,
@@ -651,7 +653,8 @@ int runAgent(
     std::atomic<std::size_t>
         processRuns{0};
 
-    sysprobe_cpu_times previousCpu{};
+    sysprobe_cpu_times
+        previousCpu{};
 
     if (
         sysprobe_read_cpu_times(
@@ -857,11 +860,14 @@ int runAgent(
 
     if (
         systemResult !=
-            Scheduler::ScheduleResult::scheduled ||
+            Scheduler::ScheduleResult::
+                scheduled ||
         networkResult !=
-            Scheduler::ScheduleResult::scheduled ||
+            Scheduler::ScheduleResult::
+                scheduled ||
         processResult !=
-            Scheduler::ScheduleResult::scheduled
+            Scheduler::ScheduleResult::
+                scheduled
     ) {
         std::cerr
             << "failed to register scheduled jobs\n";
@@ -988,6 +994,19 @@ int main(
 )
 {
     try {
+        const auto diagnosticExit =
+            nexusops::agent::
+                tryRunDiagnosticCommand(
+                    argc,
+                    argv
+                );
+
+        if (
+            diagnosticExit.has_value()
+        ) {
+            return diagnosticExit.value();
+        }
+
         const RuntimeOptions options =
             parseOptions(
                 argc,

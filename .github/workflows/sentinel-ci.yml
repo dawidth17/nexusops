@@ -28,6 +28,8 @@ jobs:
           pkg-config --version
           sqlite3 --version
           pkg-config --modversion sqlite3
+          openssl version
+          pkg-config --modversion openssl
           systemd-analyze --version
 
       - name: Configure SentinelAgent
@@ -56,6 +58,71 @@ jobs:
           NEXUSOPS_SENTINEL_SPOOL_PATH="$RUNNER_TEMP/sentinel-ci.db" \
             ./sentinel-agent/build/sentinel-agent \
             --run-seconds 2
+
+      - name: Test network diagnostics
+        run: |
+          python3 -m http.server \
+            18080 \
+            --bind 127.0.0.1 \
+            >"$RUNNER_TEMP/http-server.log" 2>&1 &
+
+          server_pid=$!
+
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          sleep 1
+
+          ./sentinel-agent/build/sentinel-agent \
+            diagnose dns localhost
+
+          ./sentinel-agent/build/sentinel-agent \
+            diagnose tcp 127.0.0.1 18080
+
+          ./sentinel-agent/build/sentinel-agent \
+            diagnose http http://127.0.0.1:18080/
+
+      - name: Test TLS diagnostics
+        run: |
+          tls_dir="$RUNNER_TEMP/sentinel-tls"
+
+          mkdir -p "$tls_dir"
+
+          openssl req \
+            -x509 \
+            -newkey rsa:2048 \
+            -sha256 \
+            -nodes \
+            -keyout "$tls_dir/key.pem" \
+            -out "$tls_dir/cert.pem" \
+            -days 2 \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost" \
+            -addext "basicConstraints=critical,CA:TRUE"
+
+          openssl s_server \
+            -quiet \
+            -accept 18443 \
+            -cert "$tls_dir/cert.pem" \
+            -key "$tls_dir/key.pem" \
+            -www \
+            >"$tls_dir/server.log" 2>&1 &
+
+          server_pid=$!
+
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          sleep 1
+
+          ./sentinel-agent/build/sentinel-agent \
+            diagnose tls \
+            localhost \
+            18443 \
+            "$tls_dir/cert.pem"
+
+          ./sentinel-agent/build/sentinel-agent \
+            diagnose http \
+            https://localhost:18443/ \
+            "$tls_dir/cert.pem"
 
       - name: Test graceful SIGTERM
         run: |

@@ -5,7 +5,7 @@ SentinelAgent is the Linux monitoring agent used by NexusOps.
 The project is split into three main parts:
 
 - `libsysprobe` - a C17 library for low-level Linux system data collection
-- `sentinel_runtime` - C++20 scheduling, concurrency and lifecycle handling
+- `sentinel_runtime` - C++20 scheduling, concurrency, lifecycle and network diagnostics
 - `sentinel_storage` - C++20 SQLite durable telemetry buffering
 
 ## Current collectors
@@ -36,54 +36,95 @@ Missed scheduler intervals are skipped instead of being submitted as a large cat
 
 Collected telemetry is stored in a local SQLite spool.
 
-Each record contains:
+Each record contains an increasing sequence number, UTC capture time, telemetry kind and telemetry payload.
 
-- an increasing sequence number
-- UTC capture time
-- telemetry kind
-- telemetry payload
-
-The SQLite schema is versioned.
-
-The spool has bounded record and payload limits.
-
-The connection is protected by a mutex so collector workers can safely share the spool.
+The spool is bounded and its schema is versioned.
 
 Telemetry remains stored across agent restarts until a later transport milestone acknowledges it.
 
-## Lifecycle and signals
+## Lifecycle
 
-SentinelAgent can now run as a long-lived Linux service.
+SentinelAgent runs as a long-lived Linux service.
 
-Lifecycle signals are blocked before worker threads are created and consumed synchronously by the main control thread.
+`SIGTERM` and `SIGINT` trigger graceful shutdown.
 
-The agent handles:
+`SIGHUP` is consumed as a reload request.
 
-- `SIGTERM` as a graceful shutdown request
-- `SIGINT` as a graceful shutdown request
-- `SIGHUP` as a reload request
+Shutdown stops the scheduler, drains accepted worker tasks and closes SQLite cleanly.
 
-A reload request currently keeps the agent running and records the lifecycle event. Reloadable configuration will be connected when configuration state requires it.
+## Network diagnostics
 
-Graceful shutdown happens in this order:
+SentinelAgent provides explicit diagnostic commands for connectivity troubleshooting.
 
-```text
-shutdown signal
-    |
-    v
-stop scheduler
-    |
-    v
-drain bounded thread pool
-    |
-    v
-finish SQLite operations
-    |
-    v
-close database and exit
+DNS resolution uses the operating system resolver through `getaddrinfo()`.
+
+TCP checks use POSIX sockets and a bounded connect timeout.
+
+HTTP checks send a direct HTTP request and validate the returned status line.
+
+HTTP status codes from 200 through 399 are considered healthy.
+
+HTTPS checks use TLS certificate-chain and hostname verification.
+
+TLS certificate checks report certificate subject, issuer and remaining days before expiry.
+
+The diagnostic implementation does not invoke shell tools such as `curl`, `nc`, `telnet` or `openssl`.
+
+The `openssl` command used in CI exists only to create a temporary local TLS test server.
+
+### DNS
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose dns localhost
 ```
 
-No complex C++ or SQLite work is executed from an asynchronous signal handler.
+### TCP
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose tcp 127.0.0.1 5432
+```
+
+### HTTP
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose http http://127.0.0.1:8080/health
+```
+
+### HTTPS
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose http https://example.internal/health
+```
+
+A custom CA certificate can be supplied as the final argument:
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose http \
+  https://example.internal/health \
+  /path/to/internal-ca.pem
+```
+
+### TLS certificate
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose tls example.internal 443
+```
+
+With a custom CA:
+
+```bash
+./sentinel-agent/build/sentinel-agent \
+  diagnose tls \
+  example.internal \
+  443 \
+  /path/to/internal-ca.pem
+```
 
 ## Local state
 
@@ -96,7 +137,7 @@ HOME/.local/state/nexusops-sentinel
 /tmp fallback
 ```
 
-The systemd service explicitly stores the spool at:
+The systemd service stores the spool at:
 
 ```text
 /var/lib/nexusops-sentinel/telemetry.db
@@ -109,11 +150,10 @@ The systemd service explicitly stores the spool at:
 - CMake 3.28+
 - Ninja
 - SQLite 3 development library
+- OpenSSL development library
 - pthreads
 
 ## Configure
-
-From the repository root:
 
 ```bash
 cmake \
@@ -140,19 +180,19 @@ ctest \
   --output-on-failure
 ```
 
-The test suite covers collectors, concurrency, scheduler backpressure, SQLite persistence and lifecycle signal handling.
+The test suite covers Linux collectors, concurrency, scheduler backpressure, SQLite persistence, lifecycle signals and local DNS/TCP/HTTP diagnostics.
+
+TLS and HTTPS are additionally tested in CI against an ephemeral local TLS server.
 
 ## Run interactively
-
-Without a runtime limit, the agent continues until it receives a shutdown signal:
 
 ```bash
 ./sentinel-agent/build/sentinel-agent
 ```
 
-Pressing `Ctrl+C` sends `SIGINT` and triggers graceful shutdown.
+Pressing `Ctrl+C` triggers graceful shutdown.
 
-For CI or a short local demonstration:
+For a bounded local run:
 
 ```bash
 ./sentinel-agent/build/sentinel-agent \
@@ -167,15 +207,11 @@ The repository contains:
 packaging/systemd/nexusops-sentinel.service
 ```
 
-The unit uses a dynamic service user and a persistent systemd state directory.
+The unit uses a dynamic service user and persistent systemd state directory.
 
-The final Debian package will install the unit automatically.
-
-For a development smoke test, the built binary and unit can be installed manually.
+The final Debian package will install the service unit automatically.
 
 ## Manual collector comparison
-
-The collected values can be compared with Linux system sources:
 
 ```bash
 head -n 1 /proc/stat

@@ -19,6 +19,7 @@ StateDirectory=nexusops-sentinel
 StateDirectoryMode=0750
 
 Environment=NEXUSOPS_SENTINEL_SPOOL_PATH=/var/lib/nexusops-sentinel/telemetry.db
+EnvironmentFile=-/etc/nexusops-sentinel/sentinel.conf
 
 NoNewPrivileges=yes
 PrivateTmp=yes

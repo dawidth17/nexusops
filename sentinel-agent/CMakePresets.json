@@ -26,6 +26,18 @@
       "cacheVariables": {
         "SENTINEL_ENABLE_SANITIZERS": "ON"
       }
+    },
+    {
+      "name": "package",
+      "displayName": "Debian package",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/package",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SENTINEL_BUILD_TESTS": "OFF",
+        "SENTINEL_ENABLE_SANITIZERS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -36,6 +48,10 @@
     {
       "name": "sanitizers",
       "configurePreset": "sanitizers"
+    },
+    {
+      "name": "package",
+      "configurePreset": "package"
     }
   ],
   "testPresets": [

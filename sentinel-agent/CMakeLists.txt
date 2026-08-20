@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.8.0
+    VERSION 0.9.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -291,3 +291,133 @@ if(SENTINEL_BUILD_TESTS)
         sentinel_storage_tests
     )
 endif()
+
+install(
+    PROGRAMS
+        "$<TARGET_FILE:sentinel-agent>"
+    DESTINATION
+        "usr/bin"
+    RENAME
+        "nexusops-sentinel-agent"
+)
+
+install(
+    FILES
+        packaging/systemd/nexusops-sentinel.service
+    DESTINATION
+        "usr/lib/systemd/system"
+)
+
+install(
+    FILES
+        packaging/config/sentinel.conf
+    DESTINATION
+        "etc/nexusops-sentinel"
+)
+
+install(
+    FILES
+        README.md
+    DESTINATION
+        "usr/share/doc/nexusops-sentinel-agent"
+)
+
+set(
+    CPACK_GENERATOR
+    "DEB"
+)
+
+set(
+    CPACK_PACKAGE_NAME
+    "nexusops-sentinel-agent"
+)
+
+set(
+    CPACK_PACKAGE_VENDOR
+    "NexusOps"
+)
+
+set(
+    CPACK_PACKAGE_CONTACT
+    "NexusOps Maintainer <dawidth17@users.noreply.github.com>"
+)
+
+set(
+    CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Linux monitoring and diagnostics agent for NexusOps"
+)
+
+set(
+    CPACK_PACKAGE_VERSION
+    "${PROJECT_VERSION}"
+)
+
+set(
+    CPACK_PACKAGING_INSTALL_PREFIX
+    "/"
+)
+
+set(
+    CPACK_PACKAGE_DIRECTORY
+    "${CMAKE_BINARY_DIR}/packages"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_NAME
+    "nexusops-sentinel-agent"
+)
+
+set(
+    CPACK_DEBIAN_FILE_NAME
+    "DEB-DEFAULT"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_RELEASE
+    "1"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_SECTION
+    "admin"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_PRIORITY
+    "optional"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_MAINTAINER
+    "${CPACK_PACKAGE_CONTACT}"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_HOMEPAGE
+    "https://github.com/dawidth17/nexusops"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_DEPENDS
+    "systemd"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_SHLIBDEPS
+    ON
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/conffiles"
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst"
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/prerm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm"
+)
+
+set(
+    CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION
+    TRUE
+)
+
+include(CPack)

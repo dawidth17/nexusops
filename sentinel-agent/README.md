@@ -70,8 +70,6 @@ TLS certificate checks report certificate subject, issuer and remaining days bef
 
 The diagnostic implementation does not invoke shell tools such as `curl`, `nc`, `telnet` or `openssl`.
 
-The `openssl` command used in CI exists only to create a temporary local TLS test server.
-
 ### DNS
 
 ```bash
@@ -100,8 +98,6 @@ The `openssl` command used in CI exists only to create a temporary local TLS tes
   diagnose http https://example.internal/health
 ```
 
-A custom CA certificate can be supplied as the final argument.
-
 ### TLS certificate
 
 ```bash
@@ -119,12 +115,13 @@ The project enables compiler warnings with:
 -Wpedantic
 ```
 
-The CI pipeline adds three independent quality gates:
+The CI pipeline includes:
 
 ```text
 regular build and tests
 AddressSanitizer + UndefinedBehaviorSanitizer
 clang-tidy + cppcheck
+Debian package build and installation smoke test
 ```
 
 AddressSanitizer is used to detect memory-safety errors.
@@ -133,19 +130,11 @@ UndefinedBehaviorSanitizer detects undefined runtime behavior.
 
 Static analysis is performed against the project compilation database.
 
-`clang-tidy` runs analyzer, bug-prone, performance and portability checks.
-
-`cppcheck` runs warning, performance and portability analysis.
-
-Static-analysis findings configured by the project fail the CI quality gate.
-
 ## CMake presets
-
-The repository provides shared CMake presets for development and sanitizer builds.
 
 From the `sentinel-agent` directory:
 
-### Development build
+### Development
 
 ```bash
 cmake --preset dev
@@ -153,7 +142,7 @@ cmake --build --preset dev
 ctest --preset dev
 ```
 
-### Sanitizer build
+### Sanitizers
 
 ```bash
 cmake --preset sanitizers
@@ -161,20 +150,133 @@ cmake --build --preset sanitizers
 ctest --preset sanitizers
 ```
 
-The sanitizer test preset sets the required ASan and UBSan runtime options.
+### Debian package
+
+```bash
+cmake --preset package
+cmake --build --preset package
+
+cpack \
+  --config build/package/CPackConfig.cmake \
+  -G DEB
+```
+
+Generated packages are written to:
+
+```text
+build/package/packages/
+```
+
+A package name follows the Debian format:
+
+```text
+nexusops-sentinel-agent_<version>-<revision>_<architecture>.deb
+```
+
+## Debian package contents
+
+The package installs:
+
+```text
+/usr/bin/nexusops-sentinel-agent
+/usr/lib/systemd/system/nexusops-sentinel.service
+/etc/nexusops-sentinel/sentinel.conf
+/usr/share/doc/nexusops-sentinel-agent/README.md
+```
+
+The configuration file is managed as a Debian conffile.
+
+Package removal preserves the configuration file.
+
+Package purge removes the configuration file.
+
+The SQLite state directory is not automatically deleted during package removal or purge.
+
+## Installing the package
+
+Build the package first.
+
+Then:
+
+```bash
+sudo dpkg \
+  -i \
+  build/package/packages/nexusops-sentinel-agent_*.deb
+```
+
+Verify the installed files:
+
+```bash
+command -v nexusops-sentinel-agent
+
+cat \
+  /etc/nexusops-sentinel/sentinel.conf
+
+systemd-analyze verify \
+  /usr/lib/systemd/system/nexusops-sentinel.service
+```
+
+## Starting the packaged service
+
+```bash
+sudo systemctl start \
+  nexusops-sentinel.service
+```
+
+Check status:
+
+```bash
+sudo systemctl status \
+  nexusops-sentinel.service \
+  --no-pager
+```
+
+Check logs:
+
+```bash
+sudo journalctl \
+  -u nexusops-sentinel.service \
+  -n 50 \
+  --no-pager
+```
+
+Enable automatic startup if desired:
+
+```bash
+sudo systemctl enable \
+  nexusops-sentinel.service
+```
+
+## Stopping the packaged service
+
+```bash
+sudo systemctl stop \
+  nexusops-sentinel.service
+```
+
+Graceful shutdown should be visible in the journal.
+
+## Removing the package
+
+Remove the program while preserving its configuration:
+
+```bash
+sudo dpkg \
+  -r \
+  nexusops-sentinel-agent
+```
+
+Purge the remaining package configuration:
+
+```bash
+sudo dpkg \
+  -P \
+  nexusops-sentinel-agent
+```
 
 ## Local static analysis
 
-Install the tools if needed:
-
-```bash
-sudo apt-get install \
-  -y \
-  clang-tidy \
-  cppcheck
-```
-
-Create the compilation database from the repository root:
+Configure the compilation database:
 
 ```bash
 cmake \
@@ -245,10 +347,16 @@ HOME/.local/state/nexusops-sentinel
 /tmp fallback
 ```
 
-The systemd service stores the spool at:
+The packaged systemd service defaults to:
 
 ```text
 /var/lib/nexusops-sentinel/telemetry.db
+```
+
+The value can be overridden through:
+
+```text
+/etc/nexusops-sentinel/sentinel.conf
 ```
 
 ## Requirements
@@ -262,37 +370,7 @@ The systemd service stores the spool at:
 - pthreads
 - clang-tidy for static analysis
 - cppcheck for static analysis
-
-## Configure
-
-```bash
-cmake \
-  -S sentinel-agent \
-  -B sentinel-agent/build \
-  -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DSENTINEL_BUILD_TESTS=ON
-```
-
-## Build
-
-```bash
-cmake \
-  --build sentinel-agent/build \
-  --parallel
-```
-
-## Tests
-
-```bash
-ctest \
-  --test-dir sentinel-agent/build \
-  --output-on-failure
-```
-
-The test suite covers Linux collectors, concurrency, scheduler backpressure, SQLite persistence, lifecycle signals and local DNS/TCP/HTTP diagnostics.
-
-TLS and HTTPS are additionally tested in CI against an ephemeral local TLS server.
+- dpkg tools for Debian packaging
 
 ## Run interactively
 
@@ -308,18 +386,6 @@ For a bounded local run:
 ./sentinel-agent/build/sentinel-agent \
   --run-seconds 5
 ```
-
-## systemd
-
-The repository contains:
-
-```text
-packaging/systemd/nexusops-sentinel.service
-```
-
-The unit uses a dynamic service user and persistent systemd state directory.
-
-The final Debian package will install the service unit automatically.
 
 ## Manual collector comparison
 

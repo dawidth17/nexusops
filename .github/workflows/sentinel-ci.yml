@@ -259,3 +259,195 @@ jobs:
             --error-exitcode=1 \
             --inline-suppr \
             --suppress=missingIncludeSystem
+
+  debian-package:
+    name: Debian package
+    runs-on: ubuntu-24.04
+    needs:
+      - cpp
+      - sanitizers
+      - static-analysis
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify packaging tools
+        run: |
+          cmake --version
+          cpack --version
+          ninja --version
+          dpkg --version
+          dpkg-deb --version
+          dpkg-shlibdeps --version
+
+      - name: Configure release package
+        run: |
+          cmake \
+            -S sentinel-agent \
+            -B sentinel-agent/build/package \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSENTINEL_BUILD_TESTS=OFF \
+            -DSENTINEL_ENABLE_SANITIZERS=OFF
+
+      - name: Build release binary
+        run: |
+          cmake \
+            --build sentinel-agent/build/package \
+            --parallel
+
+      - name: Build Debian package
+        run: |
+          cpack \
+            --config sentinel-agent/build/package/CPackConfig.cmake \
+            -G DEB
+
+          package_file="$(
+            find \
+              sentinel-agent/build/package/packages \
+              -maxdepth 1 \
+              -type f \
+              -name '*.deb' \
+              -print \
+              -quit
+          )"
+
+          test -n "$package_file"
+
+          echo "PACKAGE_FILE=$package_file" >> "$GITHUB_ENV"
+
+      - name: Inspect Debian package
+        run: |
+          dpkg-deb \
+            --info \
+            "$PACKAGE_FILE"
+
+          dpkg-deb \
+            --contents \
+            "$PACKAGE_FILE"
+
+          dpkg-deb \
+            --field \
+            "$PACKAGE_FILE" \
+            Package Version Architecture Depends
+
+          test "$(
+            dpkg-deb \
+              --field \
+              "$PACKAGE_FILE" \
+              Package
+          )" = "nexusops-sentinel-agent"
+
+          dpkg-deb \
+            --contents \
+            "$PACKAGE_FILE" \
+            | grep -q \
+              './usr/bin/nexusops-sentinel-agent'
+
+          dpkg-deb \
+            --contents \
+            "$PACKAGE_FILE" \
+            | grep -q \
+              './usr/lib/systemd/system/nexusops-sentinel.service'
+
+          dpkg-deb \
+            --contents \
+            "$PACKAGE_FILE" \
+            | grep -q \
+              './etc/nexusops-sentinel/sentinel.conf'
+
+      - name: Install Debian package
+        run: |
+          sudo dpkg \
+            -i \
+            "$PACKAGE_FILE"
+
+          test -x \
+            /usr/bin/nexusops-sentinel-agent
+
+          test -f \
+            /usr/lib/systemd/system/nexusops-sentinel.service
+
+          test -f \
+            /etc/nexusops-sentinel/sentinel.conf
+
+          systemd-analyze verify \
+            /usr/lib/systemd/system/nexusops-sentinel.service
+
+      - name: Test packaged systemd service
+        run: |
+          sudo systemctl daemon-reload
+
+          sudo systemctl start \
+            nexusops-sentinel.service
+
+          sleep 3
+
+          sudo systemctl is-active \
+            --quiet \
+            nexusops-sentinel.service
+
+          sudo systemctl stop \
+            nexusops-sentinel.service
+
+          result="$(
+            sudo systemctl show \
+              nexusops-sentinel.service \
+              --property=Result \
+              --value
+          )"
+
+          status="$(
+            sudo systemctl show \
+              nexusops-sentinel.service \
+              --property=ExecMainStatus \
+              --value
+          )"
+
+          test "$result" = "success"
+          test "$status" = "0"
+
+          sudo journalctl \
+            -u nexusops-sentinel.service \
+            --since "5 minutes ago" \
+            --no-pager \
+            | tee "$RUNNER_TEMP/package-service.log"
+
+          grep -q \
+            "SentinelAgent 0.9.0" \
+            "$RUNNER_TEMP/package-service.log"
+
+          grep -q \
+            "graceful_shutdown=true" \
+            "$RUNNER_TEMP/package-service.log"
+
+      - name: Test package removal
+        run: |
+          sudo dpkg \
+            -r \
+            nexusops-sentinel-agent
+
+          test ! -e \
+            /usr/bin/nexusops-sentinel-agent
+
+          test ! -e \
+            /usr/lib/systemd/system/nexusops-sentinel.service
+
+          test -f \
+            /etc/nexusops-sentinel/sentinel.conf
+
+          sudo dpkg \
+            -P \
+            nexusops-sentinel-agent
+
+          test ! -e \
+            /etc/nexusops-sentinel/sentinel.conf
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v7
+        with:
+          name: nexusops-sentinel-agent-deb
+          path: sentinel-agent/build/package/packages/*.deb
+          if-no-files-found: error
+          archive: false

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.6.0
+    VERSION 0.7.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -28,6 +28,11 @@ find_package(
 
 find_package(
     SQLite3
+    REQUIRED
+)
+
+find_package(
+    OpenSSL
     REQUIRED
 )
 
@@ -63,6 +68,8 @@ add_library(
     src/bounded_thread_pool.cpp
     src/scheduler.cpp
     src/signal_waiter.cpp
+    src/network_diagnostics.cpp
+    src/diagnostic_cli.cpp
 )
 
 target_include_directories(
@@ -75,6 +82,8 @@ target_link_libraries(
     sentinel_runtime
     PUBLIC
         Threads::Threads
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 target_compile_options(
@@ -195,6 +204,7 @@ if(SENTINEL_BUILD_TESTS)
         tests/bounded_thread_pool_tests.cpp
         tests/scheduler_tests.cpp
         tests/signal_waiter_tests.cpp
+        tests/network_diagnostics_tests.cpp
     )
 
     target_link_libraries(

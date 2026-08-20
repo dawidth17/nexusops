@@ -148,9 +148,9 @@ SQLiteSpool::~SQLiteSpool()
 }
 
 SpoolStatus SQLiteSpool::enqueue(
-    std::string capturedAtUtc,
-    std::string kind,
-    std::string payload,
+    const std::string &capturedAtUtc,
+    const std::string &kind,
+    const std::string &payload,
     std::int64_t *sequence
 )
 {

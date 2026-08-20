@@ -160,3 +160,102 @@ jobs:
 
           systemd-analyze verify \
             sentinel-agent/packaging/systemd/nexusops-sentinel.service
+
+  sanitizers:
+    name: ASan and UBSan
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure sanitizer build
+        run: |
+          cmake \
+            -S sentinel-agent \
+            -B sentinel-agent/build-sanitizers \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSENTINEL_BUILD_TESTS=ON \
+            -DSENTINEL_ENABLE_SANITIZERS=ON
+
+      - name: Build with sanitizers
+        run: |
+          cmake \
+            --build sentinel-agent/build-sanitizers \
+            --parallel
+
+      - name: Test with sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ctest \
+            --test-dir sentinel-agent/build-sanitizers \
+            --output-on-failure
+
+      - name: Run agent with sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          NEXUSOPS_SENTINEL_SPOOL_PATH: ${{ runner.temp }}/sentinel-sanitizers.db
+        run: |
+          ./sentinel-agent/build-sanitizers/sentinel-agent \
+            --run-seconds 2
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify clang-tidy
+        run: |
+          clang-tidy-18 --version
+
+      - name: Install cppcheck
+        run: |
+          if ! command -v cppcheck >/dev/null 2>&1; then
+            sudo apt-get install \
+              -y \
+              --no-install-recommends \
+              cppcheck
+          fi
+
+          cppcheck --version
+
+      - name: Configure analysis database
+        run: |
+          cmake \
+            -S sentinel-agent \
+            -B sentinel-agent/build-analysis \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DSENTINEL_BUILD_TESTS=OFF
+
+      - name: Run clang-tidy
+        run: |
+          mapfile -d '' source_files < <(
+            find \
+              sentinel-agent/app \
+              sentinel-agent/src \
+              -type f \
+              \( -name '*.c' -o -name '*.cpp' \) \
+              -print0
+          )
+
+          clang-tidy-18 \
+            -p sentinel-agent/build-analysis \
+            "${source_files[@]}"
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --project=sentinel-agent/build-analysis/compile_commands.json \
+            --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            --inline-suppr \
+            --suppress=missingIncludeSystem

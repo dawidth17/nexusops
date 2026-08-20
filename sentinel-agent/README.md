@@ -100,14 +100,7 @@ The `openssl` command used in CI exists only to create a temporary local TLS tes
   diagnose http https://example.internal/health
 ```
 
-A custom CA certificate can be supplied as the final argument:
-
-```bash
-./sentinel-agent/build/sentinel-agent \
-  diagnose http \
-  https://example.internal/health \
-  /path/to/internal-ca.pem
-```
+A custom CA certificate can be supplied as the final argument.
 
 ### TLS certificate
 
@@ -116,15 +109,130 @@ A custom CA certificate can be supplied as the final argument:
   diagnose tls example.internal 443
 ```
 
-With a custom CA:
+## Build quality
+
+The project enables compiler warnings with:
+
+```text
+-Wall
+-Wextra
+-Wpedantic
+```
+
+The CI pipeline adds three independent quality gates:
+
+```text
+regular build and tests
+AddressSanitizer + UndefinedBehaviorSanitizer
+clang-tidy + cppcheck
+```
+
+AddressSanitizer is used to detect memory-safety errors.
+
+UndefinedBehaviorSanitizer detects undefined runtime behavior.
+
+Static analysis is performed against the project compilation database.
+
+`clang-tidy` runs analyzer, bug-prone, performance and portability checks.
+
+`cppcheck` runs warning, performance and portability analysis.
+
+Static-analysis findings configured by the project fail the CI quality gate.
+
+## CMake presets
+
+The repository provides shared CMake presets for development and sanitizer builds.
+
+From the `sentinel-agent` directory:
+
+### Development build
 
 ```bash
-./sentinel-agent/build/sentinel-agent \
-  diagnose tls \
-  example.internal \
-  443 \
-  /path/to/internal-ca.pem
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
 ```
+
+### Sanitizer build
+
+```bash
+cmake --preset sanitizers
+cmake --build --preset sanitizers
+ctest --preset sanitizers
+```
+
+The sanitizer test preset sets the required ASan and UBSan runtime options.
+
+## Local static analysis
+
+Install the tools if needed:
+
+```bash
+sudo apt-get install \
+  -y \
+  clang-tidy \
+  cppcheck
+```
+
+Create the compilation database from the repository root:
+
+```bash
+cmake \
+  -S sentinel-agent \
+  -B sentinel-agent/build/analysis \
+  -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DSENTINEL_BUILD_TESTS=OFF
+```
+
+Run clang-tidy:
+
+```bash
+find \
+  sentinel-agent/app \
+  sentinel-agent/src \
+  -type f \
+  \( -name '*.c' -o -name '*.cpp' \) \
+  -print0 \
+  | xargs -0 clang-tidy \
+      -p sentinel-agent/build/analysis
+```
+
+Run cppcheck:
+
+```bash
+cppcheck \
+  --project=sentinel-agent/build/analysis/compile_commands.json \
+  --enable=warning,performance,portability \
+  --error-exitcode=1 \
+  --inline-suppr \
+  --suppress=missingIncludeSystem
+```
+
+## Optional local debugging
+
+Valgrind can be used as an additional local memory check:
+
+```bash
+valgrind \
+  --leak-check=full \
+  --show-leak-kinds=all \
+  --error-exitcode=1 \
+  ./sentinel-agent/build/dev/sentinel-agent \
+  --run-seconds 2
+```
+
+GDB can be used for interactive debugging:
+
+```bash
+gdb \
+  --args \
+  ./sentinel-agent/build/dev/sentinel-agent \
+  --run-seconds 5
+```
+
+Sanitizers remain the automated CI memory-safety gate.
 
 ## Local state
 
@@ -152,6 +260,8 @@ The systemd service stores the spool at:
 - SQLite 3 development library
 - OpenSSL development library
 - pthreads
+- clang-tidy for static analysis
+- cppcheck for static analysis
 
 ## Configure
 

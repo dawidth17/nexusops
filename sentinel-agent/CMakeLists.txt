@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SentinelAgent
-    VERSION 0.7.0
+    VERSION 0.8.0
     DESCRIPTION "NexusOps Linux monitoring agent"
     LANGUAGES C CXX
 )
@@ -15,11 +15,73 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 option(
     SENTINEL_BUILD_TESTS
     "Build SentinelAgent tests"
     ON
 )
+
+option(
+    SENTINEL_ENABLE_SANITIZERS
+    "Enable AddressSanitizer and UndefinedBehaviorSanitizer"
+    OFF
+)
+
+if(SENTINEL_ENABLE_SANITIZERS)
+    if(
+        NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
+        OR
+        NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+    )
+        message(
+            FATAL_ERROR
+            "SentinelAgent sanitizers require GCC or Clang"
+        )
+    endif()
+endif()
+
+function(sentinel_apply_target_options target)
+    target_compile_options(
+        ${target}
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    if(SENTINEL_ENABLE_SANITIZERS)
+        target_compile_options(
+            ${target}
+            PRIVATE
+                -fsanitize=address,undefined
+                -fno-omit-frame-pointer
+                -fno-sanitize-recover=all
+        )
+
+        get_target_property(
+            target_type
+            ${target}
+            TYPE
+        )
+
+        if(
+            target_type STREQUAL "EXECUTABLE"
+            OR
+            target_type STREQUAL "SHARED_LIBRARY"
+            OR
+            target_type STREQUAL "MODULE_LIBRARY"
+        )
+            target_link_options(
+                ${target}
+                PRIVATE
+                    -fsanitize=address,undefined
+                    -fno-omit-frame-pointer
+            )
+        endif()
+    endif()
+endfunction()
 
 find_package(
     Threads
@@ -54,12 +116,8 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_compile_options(
+sentinel_apply_target_options(
     sysprobe
-    PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
 )
 
 add_library(
@@ -86,12 +144,8 @@ target_link_libraries(
         OpenSSL::Crypto
 )
 
-target_compile_options(
+sentinel_apply_target_options(
     sentinel_runtime
-    PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
 )
 
 add_library(
@@ -112,12 +166,8 @@ target_link_libraries(
         SQLite::SQLite3
 )
 
-target_compile_options(
+sentinel_apply_target_options(
     sentinel_storage
-    PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
 )
 
 add_executable(
@@ -139,12 +189,8 @@ target_compile_definitions(
         SENTINEL_AGENT_VERSION="${PROJECT_VERSION}"
 )
 
-target_compile_options(
+sentinel_apply_target_options(
     sentinel-agent
-    PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
 )
 
 if(SENTINEL_BUILD_TESTS)
@@ -191,12 +237,8 @@ if(SENTINEL_BUILD_TESTS)
             GTest::gtest_main
     )
 
-    target_compile_options(
+    sentinel_apply_target_options(
         sysprobe_tests
-        PRIVATE
-            -Wall
-            -Wextra
-            -Wpedantic
     )
 
     add_executable(
@@ -214,12 +256,8 @@ if(SENTINEL_BUILD_TESTS)
             GTest::gtest_main
     )
 
-    target_compile_options(
+    sentinel_apply_target_options(
         sentinel_runtime_tests
-        PRIVATE
-            -Wall
-            -Wextra
-            -Wpedantic
     )
 
     add_executable(
@@ -235,12 +273,8 @@ if(SENTINEL_BUILD_TESTS)
             GTest::gtest_main
     )
 
-    target_compile_options(
+    sentinel_apply_target_options(
         sentinel_storage_tests
-        PRIVATE
-            -Wall
-            -Wextra
-            -Wpedantic
     )
 
     include(GoogleTest)

@@ -381,8 +381,8 @@ bool readProcesses(
 
 void persistTelemetry(
     SQLiteSpool &spool,
-    std::string kind,
-    std::string payload,
+    const std::string &kind,
+    const std::string &payload,
     std::atomic<std::size_t>
         &spoolFullCount,
     std::atomic<std::size_t>
@@ -394,8 +394,8 @@ void persistTelemetry(
     const auto status =
         spool.enqueue(
             utcNow(),
-            std::move(kind),
-            std::move(payload),
+            kind,
+            payload,
             &sequence
         );
 

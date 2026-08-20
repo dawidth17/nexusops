@@ -1,0 +1,13 @@
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  bugprone-dangling-handle,
+  bugprone-infinite-loop,
+  bugprone-use-after-move,
+  performance-*,
+  -performance-enum-size,
+  portability-*
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*sentinel-agent/(app|include|src)/.*'
+SystemHeaders: false

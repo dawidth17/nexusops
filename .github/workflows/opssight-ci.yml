@@ -14,6 +14,31 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    env:
+      OPSSIGHT_DB_HOST: 127.0.0.1
+      OPSSIGHT_DB_PORT: 5432
+      OPSSIGHT_DB_NAME: opssight_test
+      OPSSIGHT_DB_USER: opssight
+      OPSSIGHT_DB_PASSWORD: opssight_test_password
+
+    services:
+      postgres:
+        image: postgres:18.4
+
+        env:
+          POSTGRES_DB: opssight_test
+          POSTGRES_USER: opssight
+          POSTGRES_PASSWORD: opssight_test_password
+
+        ports:
+          - 5432:5432
+
+        options: >-
+          --health-cmd "pg_isready -U opssight -d opssight_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     defaults:
       run:
         working-directory: opssight

@@ -25,9 +25,33 @@ services:
       retries: 10
       start_period: 10s
 
+  opssight-db:
+    image: postgres:18.4
+
+    environment:
+      POSTGRES_DB: ${OPSSIGHT_DB_NAME}
+      POSTGRES_USER: ${OPSSIGHT_DB_USER}
+      POSTGRES_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+
+    ports:
+      - "127.0.0.1:${OPSSIGHT_DB_PORT}:5432"
+
+    volumes:
+      - opssight-postgres-data:/var/lib/postgresql
+
+    networks:
+      - backend
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
 volumes:
   servicecore-postgres-data:
+  opssight-postgres-data:
 
 networks:
   backend:
-    driver: bridge

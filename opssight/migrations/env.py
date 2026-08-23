@@ -24,6 +24,24 @@ _ = (
 )
 
 
+def include_object(
+    _object: object,
+    name: str | None,
+    type_: str,
+    reflected: bool,
+    compare_to: object | None,
+) -> bool:
+    if (
+        type_ == "index"
+        and reflected
+        and compare_to is None
+        and name == "telemetry_captured_at_idx"
+    ):
+        return False
+
+    return True
+
+
 def run_migrations_offline() -> None:
     database_url = build_database_url().render_as_string(
         hide_password=False,
@@ -34,6 +52,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -50,6 +69,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

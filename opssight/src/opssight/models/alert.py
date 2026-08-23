@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from opssight.models.base import Base
@@ -16,13 +16,25 @@ if TYPE_CHECKING:
 class Alert(Base):
     __tablename__ = "alerts"
 
+    __table_args__ = (
+        Index(
+            "uq_alerts_open_alert_rule_id",
+            "alert_rule_id",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
+    )
+
     id: Mapped[UUID] = mapped_column(
         primary_key=True,
         default=uuid4,
     )
 
     alert_rule_id: Mapped[UUID] = mapped_column(
-        ForeignKey("alert_rules.id", ondelete="CASCADE"),
+        ForeignKey(
+            "alert_rules.id",
+            ondelete="CASCADE",
+        ),
         nullable=False,
         index=True,
     )

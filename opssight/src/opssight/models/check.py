@@ -33,6 +33,10 @@ class Check(Base):
             "timeout_seconds > 0",
             name="ck_checks_timeout_seconds_positive",
         ),
+        CheckConstraint(
+            "consecutive_failures >= 0",
+            name="ck_checks_consecutive_failures_non_negative",
+        ),
         UniqueConstraint(
             "host_id",
             "name",
@@ -46,7 +50,10 @@ class Check(Base):
     )
 
     host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("hosts.id", ondelete="CASCADE"),
+        ForeignKey(
+            "hosts.id",
+            ondelete="CASCADE",
+        ),
         nullable=False,
         index=True,
     )
@@ -76,6 +83,12 @@ class Check(Base):
         Integer,
         nullable=False,
         default=5,
+    )
+
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
     )
 
     enabled: Mapped[bool] = mapped_column(

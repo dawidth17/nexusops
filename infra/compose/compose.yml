@@ -26,7 +26,12 @@ services:
       start_period: 10s
 
   opssight-db:
-    image: postgres:18.4
+    image: timescale/timescaledb:2.29.2-pg18
+
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb
 
     environment:
       POSTGRES_DB: ${OPSSIGHT_DB_NAME}

@@ -1,9 +1,10 @@
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,10 @@ from opssight.models.check import Check
 from opssight.models.enums import AlertSeverity, AlertStatus
 from opssight.models.host import Host
 from opssight.repositories.host_repository import create_host, get_host_by_id
+from opssight.repositories.telemetry_repository import (
+    create_telemetry,
+    list_telemetry_by_time_range,
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -53,7 +58,55 @@ def test_database_schema() -> None:
         "checks",
         "alert_rules",
         "alerts",
+        "telemetry",
     }.issubset(tables)
+
+
+def test_telemetry_is_hypertable(session: Session) -> None:
+    hypertable_name = session.execute(
+        text(
+            """
+            SELECT hypertable_name
+            FROM timescaledb_information.hypertables
+            WHERE hypertable_schema = 'public'
+              AND hypertable_name = 'telemetry'
+            """
+        )
+    ).scalar_one()
+
+    assert hypertable_name == "telemetry"
+
+
+def test_telemetry_chunk_interval(session: Session) -> None:
+    time_interval = session.execute(
+        text(
+            """
+            SELECT time_interval
+            FROM timescaledb_information.dimensions
+            WHERE hypertable_schema = 'public'
+              AND hypertable_name = 'telemetry'
+              AND column_name = 'captured_at'
+            """
+        )
+    ).scalar_one()
+
+    assert time_interval == timedelta(days=1)
+
+
+def test_telemetry_retention_policy(session: Session) -> None:
+    policy_count = session.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM timescaledb_information.jobs
+            WHERE hypertable_schema = 'public'
+              AND hypertable_name = 'telemetry'
+              AND proc_name = 'policy_retention'
+            """
+        )
+    ).scalar_one()
+
+    assert policy_count == 1
 
 
 def test_host_can_be_persisted(session: Session) -> None:
@@ -112,6 +165,58 @@ def test_monitoring_relationships(session: Session) -> None:
 
     assert alert.alert_rule is alert_rule
     assert alert in alert_rule.alerts
+
+
+def test_telemetry_can_be_persisted_and_queried(
+    session: Session,
+) -> None:
+    host = Host(
+        name="telemetry-test-host",
+        address="10.0.0.30",
+    )
+
+    session.add(host)
+    session.flush()
+
+    now = datetime.now(UTC)
+
+    create_telemetry(
+        session,
+        host_id=host.id,
+        captured_at=now - timedelta(minutes=2),
+        metric_name="cpu.utilization",
+        value=20.5,
+        unit="percent",
+        labels={"core": "all"},
+    )
+
+    create_telemetry(
+        session,
+        host_id=host.id,
+        captured_at=now - timedelta(minutes=1),
+        metric_name="cpu.utilization",
+        value=35.2,
+        unit="percent",
+        labels={"core": "all"},
+    )
+
+    session.commit()
+
+    telemetry = list_telemetry_by_time_range(
+        session,
+        host_id=host.id,
+        metric_name="cpu.utilization",
+        start_time=now - timedelta(minutes=5),
+        end_time=now + timedelta(minutes=1),
+    )
+
+    assert len(telemetry) == 2
+
+    assert telemetry[0].value == 20.5
+    assert telemetry[1].value == 35.2
+
+    assert telemetry[0].unit == "percent"
+    assert telemetry[0].labels == {"core": "all"}
 
 
 def test_invalid_check_interval_is_rejected(

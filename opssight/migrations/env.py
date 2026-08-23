@@ -4,7 +4,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from opssight.database import build_database_url
-from opssight.models import Alert, AlertRule, Check, Host
+from opssight.models import Alert, AlertRule, Check, Host, Telemetry
 from opssight.models.base import Base
 
 
@@ -20,6 +20,7 @@ _ = (
     AlertRule,
     Check,
     Host,
+    Telemetry,
 )
 
 

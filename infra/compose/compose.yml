@@ -79,10 +79,54 @@ services:
       retries: 12
       start_period: 15s
 
+  prometheus:
+    image: prom/prometheus:v3.14.0
+
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT}:9090"
+
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+    extra_hosts:
+      - "host.docker.internal:${OPSSIGHT_HOST_IP:-host-gateway}"
+
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:13.2.0
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT}:3000"
+
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+    networks:
+      - backend
+
+    depends_on:
+      - prometheus
+
 volumes:
   servicecore-postgres-data:
   opssight-postgres-data:
   rabbitmq-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   backend:

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opssight.checks.result import CheckResult
+from opssight.metrics import record_alert_transition
 from opssight.models.alert import Alert
 from opssight.models.alert_rule import AlertRule
 from opssight.models.check import Check
@@ -115,6 +116,11 @@ def process_check_result(
             session.add(alert)
             changed_alerts.append(alert)
 
+            record_alert_transition(
+                action=AlertAction.OPEN.value,
+                severity=rule.severity,
+            )
+
         elif (
             action == AlertAction.RECOVER
             and open_alert is not None
@@ -123,6 +129,11 @@ def process_check_result(
             open_alert.recovered_at = result_time
 
             changed_alerts.append(open_alert)
+
+            record_alert_transition(
+                action=AlertAction.RECOVER.value,
+                severity=rule.severity,
+            )
 
     session.flush()
 

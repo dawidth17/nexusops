@@ -4,17 +4,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from opssight.api.v1.router import router as api_v1_router
 from opssight.config import settings
 from opssight.logging_config import configure_logging
 
 
-configure_logging(settings.log_level)
+configure_logging(
+    settings.log_level
+)
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(
+    _app: FastAPI,
+) -> AsyncIterator[None]:
     logger.info(
         "application_startup",
         extra={
@@ -38,6 +43,11 @@ app = FastAPI(
     title=settings.service_name,
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.include_router(
+    api_v1_router,
+    prefix="/api/v1",
 )
 
 

@@ -54,9 +54,35 @@ services:
       retries: 10
       start_period: 10s
 
+  rabbitmq:
+    image: rabbitmq:4.3.5-management
+
+    environment:
+      RABBITMQ_DEFAULT_USER: ${OPSSIGHT_RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${OPSSIGHT_RABBITMQ_PASSWORD}
+
+    ports:
+      - "127.0.0.1:${OPSSIGHT_RABBITMQ_PORT}:5672"
+      - "127.0.0.1:${OPSSIGHT_RABBITMQ_MANAGEMENT_PORT}:15672"
+
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+
+    networks:
+      - backend
+
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
 volumes:
   servicecore-postgres-data:
   opssight-postgres-data:
+  rabbitmq-data:
 
 networks:
   backend:

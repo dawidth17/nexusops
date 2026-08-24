@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -41,6 +42,10 @@ class Check(Base):
             "host_id",
             "name",
             name="uq_checks_host_id_name",
+        ),
+        Index(
+            "ix_checks_next_run_at",
+            "next_run_at",
         ),
     )
 
@@ -89,6 +94,12 @@ class Check(Base):
         Integer,
         nullable=False,
         default=0,
+    )
+
+    next_run_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
     )
 
     enabled: Mapped[bool] = mapped_column(

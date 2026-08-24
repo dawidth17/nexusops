@@ -3,8 +3,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -29,17 +27,6 @@ pytestmark = pytest.mark.skipif(
     reason="security tests require a dedicated test database",
 )
 
-
-@pytest.fixture(scope="module", autouse=True)
-def migrate_database() -> Generator[None, None, None]:
-    alembic_config = Config("alembic.ini")
-
-    command.downgrade(alembic_config, "base")
-    command.upgrade(alembic_config, "head")
-
-    yield
-
-    engine.dispose()
 
 
 @pytest.fixture

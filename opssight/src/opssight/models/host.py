@@ -10,6 +10,7 @@ from opssight.models.base import Base
 
 if TYPE_CHECKING:
     from opssight.models.check import Check
+    from opssight.models.security_signal import SecuritySignal
     from opssight.models.telemetry import Telemetry
 
 
@@ -56,6 +57,11 @@ class Host(Base):
     )
 
     telemetry: Mapped[list["Telemetry"]] = relationship(
+        back_populates="host",
+        cascade="all, delete-orphan",
+    )
+
+    security_signals: Mapped[list["SecuritySignal"]] = relationship(
         back_populates="host",
         cascade="all, delete-orphan",
     )

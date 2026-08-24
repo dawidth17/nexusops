@@ -8,6 +8,10 @@ from opssight.models.enums import SecurityFindingStatus
 from opssight.models.security_finding import SecurityFinding
 from opssight.models.security_rule import SecurityRule
 from opssight.models.security_signal import SecuritySignal
+from opssight.metrics import (
+    record_security_finding_change,
+    record_security_signal,
+)
 
 
 def process_security_signal(
@@ -30,6 +34,10 @@ def process_security_signal(
 
     session.add(signal)
     session.flush()
+
+    record_security_signal(
+        signal.signal_type
+    )
 
     rules = list(
         session.scalars(

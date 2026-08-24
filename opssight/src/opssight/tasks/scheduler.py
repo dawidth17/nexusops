@@ -7,6 +7,7 @@ from opssight.celery_app import celery_app
 from opssight.database import SessionFactory
 from opssight.models.check import Check
 from opssight.tasks.checks import execute_check_task
+from opssight.metrics import record_scheduler_dispatch
 
 
 @celery_app.task(
@@ -45,5 +46,7 @@ def dispatch_due_checks() -> int:
         execute_check_task.delay(
             str(check_id)
         )
+
+        record_scheduler_dispatch()
 
     return len(scheduled_checks)

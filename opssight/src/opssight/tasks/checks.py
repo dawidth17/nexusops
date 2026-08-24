@@ -5,6 +5,7 @@ from opssight.alerting.engine import process_check_result
 from opssight.celery_app import celery_app
 from opssight.checks.executor import execute_check
 from opssight.database import SessionFactory
+from opssight.metrics import record_check_execution
 from opssight.models.check import Check
 
 
@@ -37,6 +38,12 @@ def execute_check_task(
 
         result = asyncio.run(
             execute_check(check)
+        )
+
+        record_check_execution(
+            check_type=check.check_type,
+            success=result.success,
+            duration_ms=result.duration_ms,
         )
 
         process_check_result(

@@ -27,24 +27,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(scope="module", autouse=True)
-def migrate_database() -> Generator[None, None, None]:
-    alembic_config = Config("alembic.ini")
-
-    command.downgrade(
-        alembic_config,
-        "base",
-    )
-    command.upgrade(
-        alembic_config,
-        "head",
-    )
-
-    yield
-
-    engine.dispose()
-
-
 @pytest.fixture
 def session() -> Generator[Session, None, None]:
     with SessionFactory() as database_session:

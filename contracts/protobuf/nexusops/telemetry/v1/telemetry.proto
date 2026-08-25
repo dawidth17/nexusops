@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package nexusops.telemetry.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service TelemetryService {
+  rpc StreamTelemetry(stream TelemetryEnvelope)
+      returns (stream AgentControl);
+}
+
+message TelemetryEnvelope {
+  string agent_id = 1;
+  string batch_id = 2;
+  google.protobuf.Timestamp sent_at = 3;
+
+  oneof body {
+    Heartbeat heartbeat = 10;
+    MetricBatch metrics = 11;
+  }
+}
+
+message Heartbeat {
+  string hostname = 1;
+  string agent_version = 2;
+}
+
+message MetricBatch {
+  repeated TelemetryRecord records = 1;
+}
+
+message TelemetryRecord {
+  int64 sequence = 1;
+  google.protobuf.Timestamp captured_at = 2;
+
+  oneof payload {
+    SystemMetrics system = 10;
+    NetworkSnapshot network = 11;
+    ProcessSnapshot processes = 12;
+  }
+}
+
+message SystemMetrics {
+  double cpu_usage_percent = 1;
+  uint64 memory_used_bytes = 2;
+  uint64 filesystem_used_bytes = 3;
+  double uptime_seconds = 4;
+}
+
+message NetworkSnapshot {
+  repeated NetworkInterface interfaces = 1;
+}
+
+message NetworkInterface {
+  string name = 1;
+  string ipv4_address = 2;
+  string ipv6_address = 3;
+
+  uint64 rx_bytes = 4;
+  uint64 rx_packets = 5;
+  uint64 rx_errors = 6;
+  uint64 rx_dropped = 7;
+
+  uint64 tx_bytes = 8;
+  uint64 tx_packets = 9;
+  uint64 tx_errors = 10;
+  uint64 tx_dropped = 11;
+}
+
+message ProcessSnapshot {
+  repeated ProcessInfo processes = 1;
+}
+
+message ProcessInfo {
+  uint32 pid = 1;
+  uint32 parent_pid = 2;
+  string state = 3;
+  string name = 4;
+  uint64 resident_memory_bytes = 5;
+}
+
+message AgentControl {
+  oneof body {
+    Ack ack = 10;
+    BackoffHint backoff_hint = 11;
+    ConfigVersion config_version = 12;
+  }
+}
+
+message Ack {
+  string batch_id = 1;
+  int64 acknowledged_through_sequence = 2;
+  google.protobuf.Timestamp accepted_at = 3;
+}
+
+message BackoffHint {
+  uint32 retry_after_ms = 1;
+  string reason = 2;
+}
+
+message ConfigVersion {
+  string version = 1;
+}

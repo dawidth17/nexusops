@@ -1,0 +1,137 @@
+name: Contracts CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: contracts-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  protobuf:
+    name: Protobuf contracts
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install C++ Protobuf and gRPC tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install \
+            -y \
+            --no-install-recommends \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            ninja-build \
+            pkg-config \
+            protobuf-compiler \
+            protobuf-compiler-grpc
+
+      - name: Verify toolchain
+        run: |
+          protoc --version
+          cmake --version
+          ninja --version
+          pkg-config --modversion protobuf
+          pkg-config --modversion grpc++
+          grpc_cpp_plugin --version 2>&1 || true
+
+      - name: Validate telemetry contract
+        run: |
+          protoc \
+            -I contracts/protobuf \
+            -I /usr/include \
+            --include_imports \
+            --descriptor_set_out="$RUNNER_TEMP/nexusops-telemetry.pb" \
+            contracts/protobuf/nexusops/telemetry/v1/telemetry.proto
+
+      - name: Configure C++ contract build
+        run: |
+          cmake \
+            -S contracts/protobuf \
+            -B "$RUNNER_TEMP/contracts-cpp" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build generated C++ contract
+        run: |
+          cmake \
+            --build "$RUNNER_TEMP/contracts-cpp" \
+            --parallel
+
+      - name: Test generated C++ contract
+        run: |
+          ctest \
+            --test-dir "$RUNNER_TEMP/contracts-cpp" \
+            --output-on-failure
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Generate and test Python contract
+        run: |
+          generated_dir="$RUNNER_TEMP/contracts-python"
+
+          mkdir -p "$generated_dir"
+
+          grpc_include="$(
+            uv run \
+              --with grpcio-tools \
+              python -c \
+              'import pathlib, grpc_tools; print(pathlib.Path(grpc_tools.__file__).parent / "_proto")'
+          )"
+
+          uv run \
+            --with grpcio \
+            --with grpcio-tools \
+            --with protobuf \
+            python -m grpc_tools.protoc \
+              -I contracts/protobuf \
+              -I "$grpc_include" \
+              --python_out="$generated_dir" \
+              --grpc_python_out="$generated_dir" \
+              contracts/protobuf/nexusops/telemetry/v1/telemetry.proto
+
+          PYTHONPATH="$generated_dir" \
+            uv run \
+              --with grpcio \
+              --with protobuf \
+              python \
+              contracts/protobuf/tests/python_contract_smoke.py
+
+      - name: Verify generated code is not committed
+        run: |
+          generated_files="$(
+            git ls-files \
+              | grep -E \
+                '(\.pb\.cc|\.pb\.h|_pb2\.py|_pb2_grpc\.py)$' \
+              || true
+          )"
+
+          if [ -n "$generated_files" ]; then
+            printf '%s\n' "$generated_files"
+            echo "generated protobuf files must not be committed"
+            exit 1
+          fi

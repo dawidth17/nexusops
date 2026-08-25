@@ -8,16 +8,27 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock README.md ./
+COPY opssight/pyproject.toml \
+    opssight/uv.lock \
+    opssight/README.md \
+    ./
 
 RUN uv sync \
     --locked \
-    --no-dev \
+    --dev \
     --no-install-project
 
-COPY src ./src
-COPY migrations ./migrations
-COPY alembic.ini ./
+COPY opssight/src ./src
+COPY opssight/scripts ./scripts
+COPY opssight/migrations ./migrations
+COPY opssight/alembic.ini ./
+
+COPY contracts/protobuf /contracts/protobuf
+
+RUN uv run python \
+    scripts/generate_protobuf.py \
+    --contract-root /contracts/protobuf \
+    --output-root /app/src
 
 RUN uv sync \
     --locked \
@@ -47,12 +58,14 @@ COPY --from=builder \
     /app/.venv \
     /app/.venv
 
-COPY --chown=opssight:opssight \
-    alembic.ini \
+COPY --from=builder \
+    --chown=opssight:opssight \
+    /app/alembic.ini \
     ./
 
-COPY --chown=opssight:opssight \
-    migrations \
+COPY --from=builder \
+    --chown=opssight:opssight \
+    /app/migrations \
     ./migrations
 
 USER opssight

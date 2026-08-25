@@ -11,8 +11,10 @@ dependencies = [
     "alembic>=1.19.1",
     "celery>=5.6.3,<6",
     "fastapi>=0.141.1",
+    "grpcio>=1.83.0",
     "httpx>=0.28.1",
     "prometheus-client>=0.26.0",
+    "protobuf>=7.36.0",
     "psycopg[binary]>=3.3.4",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
@@ -27,15 +29,21 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
+    "grpcio-tools>=1.83.0",
     "httpx>=0.28.1",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.4",
+    "types-grpcio>=1.83.0.20260730",
+    "types-protobuf>=7.34.1.20260518",
 ]
 
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+extend-exclude = [
+    "src/opssight/generated",
+]
 
 [tool.ruff.lint]
 select = [
@@ -48,6 +56,9 @@ select = [
     "RUF",
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["opssight"]
+
 [tool.ruff.lint.per-file-ignores]
 "src/opssight/api/v1/*.py" = ["B008"]
 "src/opssight/auth/dependencies.py" = ["B008"]
@@ -56,6 +67,9 @@ select = [
 [tool.mypy]
 python_version = "3.12"
 warn_unused_configs = true
+exclude = [
+    "^src/opssight/generated/",
+]
 
 [[tool.mypy.overrides]]
 module = [
@@ -63,3 +77,9 @@ module = [
     "celery.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "opssight.generated.*",
+]
+ignore_errors = true

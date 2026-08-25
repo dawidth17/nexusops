@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from opssight.models.base import Base
 
 if TYPE_CHECKING:
+    from opssight.models.agent import Agent
     from opssight.models.check import Check
     from opssight.models.security_signal import SecuritySignal
     from opssight.models.telemetry import Telemetry
@@ -48,6 +49,11 @@ class Host(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+    )
+
+    agents: Mapped[list["Agent"]] = relationship(
+        back_populates="host",
+        cascade="all, delete-orphan",
     )
 
     checks: Mapped[list["Check"]] = relationship(

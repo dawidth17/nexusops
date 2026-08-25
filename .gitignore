@@ -40,6 +40,8 @@ venv/
 .coverage
 htmlcov/
 
+opssight/src/opssight/generated/
+
 # node
 node_modules/
 dist/

@@ -154,6 +154,39 @@ SpoolStatus SQLiteSpool::enqueue(
     std::int64_t *sequence
 )
 {
+    return enqueueWithFormat(
+        capturedAtUtc,
+        kind,
+        TelemetryPayloadFormat::legacy_text,
+        payload,
+        sequence
+    );
+}
+
+SpoolStatus SQLiteSpool::enqueueProtobuf(
+    const std::string &capturedAtUtc,
+    const std::string &kind,
+    const std::string &payload,
+    std::int64_t *sequence
+)
+{
+    return enqueueWithFormat(
+        capturedAtUtc,
+        kind,
+        TelemetryPayloadFormat::protobuf,
+        payload,
+        sequence
+    );
+}
+
+SpoolStatus SQLiteSpool::enqueueWithFormat(
+    const std::string &capturedAtUtc,
+    const std::string &kind,
+    TelemetryPayloadFormat payloadFormat,
+    const std::string &payload,
+    std::int64_t *sequence
+)
+{
     if (
         sequence == nullptr ||
         capturedAtUtc.empty() ||
@@ -218,8 +251,9 @@ SpoolStatus SQLiteSpool::enqueue(
 
     const char *sql =
         "INSERT INTO telemetry_spool("
-        "captured_at_utc, kind, payload"
-        ") VALUES (?, ?, ?);";
+        "captured_at_utc, kind, "
+        "payload_format, payload"
+        ") VALUES (?, ?, ?, ?);";
 
     if (
         sqlite3_prepare_v2(
@@ -251,21 +285,34 @@ SpoolStatus SQLiteSpool::enqueue(
             statement.get(),
             1,
             capturedAtUtc.c_str(),
-            -1,
+            static_cast<int>(
+                capturedAtUtc.size()
+            ),
             SQLITE_TRANSIENT
         ) != SQLITE_OK ||
         sqlite3_bind_text(
             statement.get(),
             2,
             kind.c_str(),
-            -1,
+            static_cast<int>(
+                kind.size()
+            ),
             SQLITE_TRANSIENT
         ) != SQLITE_OK ||
-        sqlite3_bind_text(
+        sqlite3_bind_int(
             statement.get(),
             3,
-            payload.c_str(),
-            -1,
+            static_cast<int>(
+                payloadFormat
+            )
+        ) != SQLITE_OK ||
+        sqlite3_bind_blob(
+            statement.get(),
+            4,
+            payload.data(),
+            static_cast<int>(
+                payload.size()
+            ),
             SQLITE_TRANSIENT
         ) != SQLITE_OK
     ) {
@@ -359,7 +406,7 @@ SpoolStatus SQLiteSpool::peekOldest(
     const char *sql =
         "SELECT "
         "sequence, captured_at_utc, "
-        "kind, payload "
+        "kind, payload_format, payload "
         "FROM telemetry_spool "
         "ORDER BY sequence ASC "
         "LIMIT ?;";
@@ -440,20 +487,51 @@ SpoolStatus SQLiteSpool::peekOldest(
                 2
             );
 
-        const unsigned char
-            *payload =
-                sqlite3_column_text(
-                    statement.get(),
-                    3
-                );
+        const int payloadFormatValue =
+            sqlite3_column_int(
+                statement.get(),
+                3
+            );
+
+        const void *payload =
+            sqlite3_column_blob(
+                statement.get(),
+                4
+            );
+
+        const int payloadBytes =
+            sqlite3_column_bytes(
+                statement.get(),
+                4
+            );
 
         if (
             capturedAt == nullptr ||
             kind == nullptr ||
-            payload == nullptr
+            payload == nullptr ||
+            payloadBytes <= 0
         ) {
             lastError_ =
-                "spool row contains null text";
+                "spool row contains invalid data";
+
+            return SpoolStatus::
+                storage_error;
+        }
+
+        if (
+            payloadFormatValue !=
+                static_cast<int>(
+                    TelemetryPayloadFormat::
+                        legacy_text
+                ) &&
+            payloadFormatValue !=
+                static_cast<int>(
+                    TelemetryPayloadFormat::
+                        protobuf
+                )
+        ) {
+            lastError_ =
+                "spool row has unsupported payload format";
 
             return SpoolStatus::
                 storage_error;
@@ -475,9 +553,17 @@ SpoolStatus SQLiteSpool::peekOldest(
                 reinterpret_cast<
                     const char *
                 >(kind),
-                reinterpret_cast<
-                    const char *
-                >(payload)
+                static_cast<
+                    TelemetryPayloadFormat
+                >(payloadFormatValue),
+                std::string(
+                    static_cast<
+                        const char *
+                    >(payload),
+                    static_cast<
+                        std::size_t
+                    >(payloadBytes)
+                )
             }
         );
     }
@@ -788,11 +874,13 @@ bool SQLiteSpool::migrateLocked()
                 "captured_at_utc TEXT NOT NULL,"
                 "kind TEXT NOT NULL "
                 "CHECK(length(kind) BETWEEN 1 AND 64),"
-                "payload TEXT NOT NULL"
+                "payload_format INTEGER NOT NULL "
+                "CHECK(payload_format IN (1, 2)),"
+                "payload BLOB NOT NULL"
                 ");"
             ) ||
             !executeLocked(
-                "PRAGMA user_version=1;"
+                "PRAGMA user_version=2;"
             ) ||
             !executeLocked(
                 "COMMIT;"
@@ -805,7 +893,63 @@ bool SQLiteSpool::migrateLocked()
             return false;
         }
 
-        version = 1;
+        version = 2;
+    }
+
+    if (version == 1) {
+        if (
+            !executeLocked(
+                "BEGIN IMMEDIATE;"
+            )
+        ) {
+            return false;
+        }
+
+        if (
+            !executeLocked(
+                "ALTER TABLE telemetry_spool "
+                "RENAME TO telemetry_spool_v1;"
+            ) ||
+            !executeLocked(
+                "CREATE TABLE telemetry_spool("
+                "sequence INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "captured_at_utc TEXT NOT NULL,"
+                "kind TEXT NOT NULL "
+                "CHECK(length(kind) BETWEEN 1 AND 64),"
+                "payload_format INTEGER NOT NULL "
+                "CHECK(payload_format IN (1, 2)),"
+                "payload BLOB NOT NULL"
+                ");"
+            ) ||
+            !executeLocked(
+                "INSERT INTO telemetry_spool("
+                "sequence, captured_at_utc, kind, "
+                "payload_format, payload"
+                ") "
+                "SELECT "
+                "sequence, captured_at_utc, kind, "
+                "1, CAST(payload AS BLOB) "
+                "FROM telemetry_spool_v1 "
+                "ORDER BY sequence;"
+            ) ||
+            !executeLocked(
+                "DROP TABLE telemetry_spool_v1;"
+            ) ||
+            !executeLocked(
+                "PRAGMA user_version=2;"
+            ) ||
+            !executeLocked(
+                "COMMIT;"
+            )
+        ) {
+            executeLocked(
+                "ROLLBACK;"
+            );
+
+            return false;
+        }
+
+        version = 2;
     }
 
     if (

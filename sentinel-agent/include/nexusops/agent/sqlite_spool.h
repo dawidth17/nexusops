@@ -18,16 +18,24 @@ enum class SpoolStatus {
     storage_error
 };
 
+enum class TelemetryPayloadFormat : int {
+    legacy_text = 1,
+    protobuf = 2
+};
+
 struct TelemetryRecord {
     std::int64_t sequence{0};
     std::string capturedAtUtc;
     std::string kind;
+    TelemetryPayloadFormat payloadFormat{
+        TelemetryPayloadFormat::legacy_text
+    };
     std::string payload;
 };
 
 class SQLiteSpool {
 public:
-    static constexpr int schemaVersion = 1;
+    static constexpr int schemaVersion = 2;
 
     static constexpr std::size_t
         maxTimestampBytes = 64;
@@ -68,6 +76,13 @@ public:
         std::int64_t *sequence
     );
 
+    SpoolStatus enqueueProtobuf(
+        const std::string &capturedAtUtc,
+        const std::string &kind,
+        const std::string &payload,
+        std::int64_t *sequence
+    );
+
     SpoolStatus peekOldest(
         std::size_t limit,
         std::vector<TelemetryRecord> &records
@@ -92,6 +107,14 @@ public:
     std::string lastError() const;
 
 private:
+    SpoolStatus enqueueWithFormat(
+        const std::string &capturedAtUtc,
+        const std::string &kind,
+        TelemetryPayloadFormat payloadFormat,
+        const std::string &payload,
+        std::int64_t *sequence
+    );
+
     bool executeLocked(
         const char *sql
     );

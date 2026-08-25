@@ -58,6 +58,7 @@ def clean_test_database() -> Generator[None, None, None]:
                     alerts,
                     alert_rules,
                     checks,
+                    agents,
                     hosts
                 RESTART IDENTITY
                 CASCADE

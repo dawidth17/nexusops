@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - "sentinel-agent/**"
+      - "contracts/protobuf/**"
       - ".github/workflows/sentinel-ci.yml"
   pull_request:
     paths:
       - "sentinel-agent/**"
+      - "contracts/protobuf/**"
       - ".github/workflows/sentinel-ci.yml"
 
 jobs:
@@ -18,6 +20,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Install Protobuf and gRPC tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install \
+            -y \
+            --no-install-recommends \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc
 
       - name: Verify build tools
         run: |
@@ -30,6 +44,10 @@ jobs:
           pkg-config --modversion sqlite3
           openssl version
           pkg-config --modversion openssl
+          protoc --version
+          command -v grpc_cpp_plugin
+          pkg-config --modversion protobuf
+          pkg-config --modversion grpc++
           systemd-analyze --version
 
       - name: Configure SentinelAgent
@@ -53,11 +71,82 @@ jobs:
             --test-dir sentinel-agent/build \
             --output-on-failure
 
-      - name: Run SentinelAgent
+      - name: Verify gRPC transport tests
         run: |
-          NEXUSOPS_SENTINEL_SPOOL_PATH="$RUNNER_TEMP/sentinel-ci.db" \
+          test_list="$(
+            ./sentinel-agent/build/sentinel_grpc_transport_tests \
+              --gtest_list_tests
+          )"
+
+          printf '%s\n' "$test_list"
+
+          grep -q \
+            "acknowledgesSentRecords" \
+            <<< "$test_list"
+
+          grep -q \
+            "keepsSpoolWhenServerIsUnavailable" \
+            <<< "$test_list"
+
+          grep -q \
+            "reconnectsAndResendsSameBatchInOrder" \
+            <<< "$test_list"
+
+          ./sentinel-agent/build/sentinel_grpc_transport_tests
+
+      - name: Run SentinelAgent offline
+        run: |
+          log_file="$RUNNER_TEMP/sentinel-offline.log"
+          spool_file="$RUNNER_TEMP/sentinel-ci.db"
+
+          NEXUSOPS_SENTINEL_SPOOL_PATH="$spool_file" \
+          NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:59999 \
             ./sentinel-agent/build/sentinel-agent \
-            --run-seconds 2
+            --run-seconds 7 \
+            >"$log_file" 2>&1
+
+          cat "$log_file"
+
+          grep -q \
+            "transport status=transport_error" \
+            "$log_file"
+
+          grep -q \
+            "graceful_shutdown=true" \
+            "$log_file"
+
+      - name: Verify Protobuf telemetry spool
+        run: |
+          database="$RUNNER_TEMP/sentinel-ci.db"
+
+          test "$(
+            sqlite3 "$database" \
+              "SELECT COUNT(*) FROM telemetry_spool;"
+          )" -ge 3
+
+          test "$(
+            sqlite3 "$database" \
+              "SELECT COUNT(*) FROM telemetry_spool
+               WHERE payload_format != 2;"
+          )" = "0"
+
+          test "$(
+            sqlite3 "$database" \
+              "SELECT COUNT(*) FROM telemetry_spool
+               WHERE kind = 'system';"
+          )" -ge 1
+
+          test "$(
+            sqlite3 "$database" \
+              "SELECT COUNT(*) FROM telemetry_spool
+               WHERE kind = 'network';"
+          )" -ge 1
+
+          test "$(
+            sqlite3 "$database" \
+              "SELECT COUNT(*) FROM telemetry_spool
+               WHERE kind = 'processes';"
+          )" -ge 1
 
       - name: Test network diagnostics
         run: |
@@ -130,6 +219,7 @@ jobs:
           spool_file="$RUNNER_TEMP/sentinel-sigterm.db"
 
           NEXUSOPS_SENTINEL_SPOOL_PATH="$spool_file" \
+          NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:59999 \
             ./sentinel-agent/build/sentinel-agent \
             >"$log_file" 2>&1 &
 
@@ -169,6 +259,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install Protobuf and gRPC tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install \
+            -y \
+            --no-install-recommends \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc
+
       - name: Configure sanitizer build
         run: |
           cmake \
@@ -199,6 +301,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           NEXUSOPS_SENTINEL_SPOOL_PATH: ${{ runner.temp }}/sentinel-sanitizers.db
+          NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT: 127.0.0.1:59999
         run: |
           ./sentinel-agent/build-sanitizers/sentinel-agent \
             --run-seconds 2
@@ -210,6 +313,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Install Protobuf and gRPC tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install \
+            -y \
+            --no-install-recommends \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc
 
       - name: Verify clang-tidy
         run: |
@@ -236,6 +351,13 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DSENTINEL_BUILD_TESTS=OFF
 
+      - name: Generate analysis Protobuf sources
+        run: |
+          cmake \
+            --build sentinel-agent/build-analysis \
+            --target nexusops_telemetry_contract \
+            --parallel
+
       - name: Run clang-tidy
         run: |
           mapfile -d '' source_files < <(
@@ -255,6 +377,8 @@ jobs:
         run: |
           cppcheck \
             --project=sentinel-agent/build-analysis/compile_commands.json \
+            -isentinel-agent/build-analysis/generated \
+            --suppress='preprocessorErrorDirective:sentinel-agent/build-analysis/generated/nexusops/telemetry/v1/telemetry.pb.h' \
             --enable=warning,performance,portability \
             --error-exitcode=1 \
             --inline-suppr \
@@ -271,6 +395,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Install Protobuf and gRPC tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install \
+            -y \
+            --no-install-recommends \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc
 
       - name: Verify packaging tools
         run: |

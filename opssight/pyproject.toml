@@ -56,6 +56,9 @@ select = [
     "RUF",
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["opssight"]
+
 [tool.ruff.lint.per-file-ignores]
 "src/opssight/api/v1/*.py" = ["B008"]
 "src/opssight/auth/dependencies.py" = ["B008"]

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     rabbitmq_user: str = "opssight"
     rabbitmq_password: SecretStr = SecretStr("change_me")
 
-    grpc_host: str = "0.0.0.0"
+    grpc_host: str = "127.0.0.1"
     grpc_port: int = 50051
     grpc_max_workers: int = 10
 

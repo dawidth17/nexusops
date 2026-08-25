@@ -81,7 +81,8 @@ services:
 
   opssight-migrate:
     build:
-      context: ../../opssight
+      context: ../..
+      dockerfile: opssight/Dockerfile
 
     image: nexusops-opssight:dev
 
@@ -108,7 +109,8 @@ services:
 
   opssight-api:
     build:
-      context: ../../opssight
+      context: ../..
+      dockerfile: opssight/Dockerfile
 
     image: nexusops-opssight:dev
 
@@ -118,13 +120,18 @@ services:
       OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
       OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
       OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+
       OPSSIGHT_RABBITMQ_HOST: rabbitmq
       OPSSIGHT_RABBITMQ_PORT: "5672"
       OPSSIGHT_RABBITMQ_USER: ${OPSSIGHT_RABBITMQ_USER}
       OPSSIGHT_RABBITMQ_PASSWORD: ${OPSSIGHT_RABBITMQ_PASSWORD}
 
+      OPSSIGHT_GRPC_HOST: "0.0.0.0"
+      OPSSIGHT_GRPC_PORT: "50051"
+
     ports:
       - "127.0.0.1:${OPSSIGHT_API_PORT}:8000"
+      - "127.0.0.1:${OPSSIGHT_GRPC_PORT}:50051"
 
     networks:
       - backend
@@ -148,7 +155,8 @@ services:
 
   opssight-worker:
     build:
-      context: ../../opssight
+      context: ../..
+      dockerfile: opssight/Dockerfile
 
     image: nexusops-opssight:dev
 
@@ -165,6 +173,7 @@ services:
       OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
       OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
       OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+
       OPSSIGHT_RABBITMQ_HOST: rabbitmq
       OPSSIGHT_RABBITMQ_PORT: "5672"
       OPSSIGHT_RABBITMQ_USER: ${OPSSIGHT_RABBITMQ_USER}
@@ -176,12 +185,14 @@ services:
     depends_on:
       opssight-migrate:
         condition: service_completed_successfully
+
       rabbitmq:
         condition: service_healthy
 
   opssight-scheduler:
     build:
-      context: ../../opssight
+      context: ../..
+      dockerfile: opssight/Dockerfile
 
     image: nexusops-opssight:dev
 
@@ -199,6 +210,7 @@ services:
       OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
       OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
       OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+
       OPSSIGHT_RABBITMQ_HOST: rabbitmq
       OPSSIGHT_RABBITMQ_PORT: "5672"
       OPSSIGHT_RABBITMQ_USER: ${OPSSIGHT_RABBITMQ_USER}
@@ -210,6 +222,7 @@ services:
     depends_on:
       opssight-migrate:
         condition: service_completed_successfully
+
       rabbitmq:
         condition: service_healthy
 

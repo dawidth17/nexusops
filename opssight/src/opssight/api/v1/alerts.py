@@ -12,7 +12,6 @@ from opssight.repositories.alert_repository import (
 )
 from opssight.schemas.alert import AlertResponse
 
-
 router = APIRouter()
 
 

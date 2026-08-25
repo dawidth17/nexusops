@@ -2,12 +2,18 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from opssight.models.base import Base
 from opssight.models.enums import AlertSeverity
-
 
 if TYPE_CHECKING:
     from opssight.models.alert import Alert

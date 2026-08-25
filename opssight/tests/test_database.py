@@ -2,9 +2,7 @@ from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,7 +18,6 @@ from opssight.repositories.telemetry_repository import (
     create_telemetry,
     list_telemetry_by_time_range,
 )
-
 
 pytestmark = pytest.mark.skipif(
     not settings.db_name.endswith("_test"),
@@ -216,7 +213,7 @@ def test_invalid_check_interval_is_rejected(
         address="10.0.0.20",
     )
 
-    invalid_check = Check(
+    _invalid_check = Check(
         host=host,
         name="invalid-check",
         check_type="tcp",

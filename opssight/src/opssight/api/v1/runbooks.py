@@ -17,7 +17,6 @@ from opssight.schemas.runbook import (
     RunbookResponse,
 )
 
-
 router = APIRouter()
 
 

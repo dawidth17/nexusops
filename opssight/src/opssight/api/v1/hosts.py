@@ -17,7 +17,6 @@ from opssight.schemas.host import (
     HostResponse,
 )
 
-
 router = APIRouter()
 
 

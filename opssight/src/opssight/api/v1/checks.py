@@ -19,7 +19,6 @@ from opssight.schemas.check import (
     CheckResponse,
 )
 
-
 router = APIRouter()
 
 

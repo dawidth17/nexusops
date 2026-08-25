@@ -5,17 +5,14 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy.orm import Session
 
 import opssight.tasks.scheduler as scheduler_tasks
 from opssight.config import settings
-from opssight.database import SessionFactory, engine
+from opssight.database import SessionFactory
 from opssight.models.check import Check
 from opssight.models.host import Host
 from opssight.tasks.scheduler import dispatch_due_checks
-
 
 pytestmark = pytest.mark.skipif(
     not settings.db_name.endswith("_test"),

@@ -2,7 +2,6 @@ from celery import Celery
 
 from opssight.messaging import build_broker_url
 
-
 celery_app = Celery(
     "opssight",
     broker=build_broker_url(),

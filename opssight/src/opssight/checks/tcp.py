@@ -14,7 +14,7 @@ async def run_tcp_check(
     start = perf_counter()
 
     try:
-        reader, writer = await asyncio.wait_for(
+        _reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
             timeout=timeout_seconds,
         )

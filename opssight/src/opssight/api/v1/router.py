@@ -8,7 +8,6 @@ from opssight.api.v1.security_findings import (
     router as security_findings_router,
 )
 
-
 router = APIRouter()
 
 router.include_router(

@@ -1,18 +1,43 @@
 name: OpsSight CI
 
 on:
-  push:
-    paths:
-      - "opssight/**"
-      - ".github/workflows/opssight_ci.yml"
   pull_request:
+    branches:
+      - main
     paths:
       - "opssight/**"
-      - ".github/workflows/opssight_ci.yml"
+      - "infra/compose/compose.yml"
+      - "infra/compose/.env.example"
+      - "infra/compose/prometheus/**"
+      - "infra/compose/grafana/**"
+      - "infra/compose/rabbitmq/**"
+      - ".github/workflows/opssight-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "opssight/**"
+      - "infra/compose/compose.yml"
+      - "infra/compose/.env.example"
+      - "infra/compose/prometheus/**"
+      - "infra/compose/grafana/**"
+      - "infra/compose/rabbitmq/**"
+      - ".github/workflows/opssight-ci.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: opssight-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  verify:
+    name: Test and quality
+    runs-on: ubuntu-24.04
 
     env:
       OPSSIGHT_DB_HOST: 127.0.0.1
@@ -20,6 +45,11 @@ jobs:
       OPSSIGHT_DB_NAME: opssight_test
       OPSSIGHT_DB_USER: opssight
       OPSSIGHT_DB_PASSWORD: opssight_test_password
+
+      OPSSIGHT_RABBITMQ_HOST: 127.0.0.1
+      OPSSIGHT_RABBITMQ_PORT: 5672
+      OPSSIGHT_RABBITMQ_USER: opssight
+      OPSSIGHT_RABBITMQ_PASSWORD: opssight_test_password
 
     services:
       postgres:
@@ -39,12 +69,24 @@ jobs:
           --health-timeout 3s
           --health-retries 10
 
-    defaults:
-      run:
-        working-directory: opssight
+      rabbitmq:
+        image: rabbitmq:4.3.5-management
+
+        env:
+          RABBITMQ_DEFAULT_USER: opssight
+          RABBITMQ_DEFAULT_PASS: opssight_test_password
+
+        ports:
+          - 5672:5672
+
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Set up uv
@@ -53,13 +95,251 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.12
+        working-directory: opssight
+        run: |
+          uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --dev
+        working-directory: opssight
+        run: |
+          uv sync \
+            --locked \
+            --dev
 
-      - name: Build package
-        run: uv build
+      - name: Run Ruff
+        working-directory: opssight
+        run: |
+          uv run ruff check src tests
+
+      - name: Run mypy
+        working-directory: opssight
+        run: |
+          uv run mypy src
+
+      - name: Run Bandit
+        working-directory: opssight
+        run: |
+          uv run bandit \
+            -q \
+            -r src
+
+      - name: Apply migrations
+        working-directory: opssight
+        run: |
+          uv run alembic upgrade head
+
+      - name: Check migrations
+        working-directory: opssight
+        run: |
+          uv run alembic current
+          uv run alembic check
 
       - name: Run tests
-        run: uv run pytest -v
+        working-directory: opssight
+        run: |
+          uv run pytest -v
+
+      - name: Build package
+        working-directory: opssight
+        run: |
+          uv build
+
+  compose:
+    name: Compose configuration
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Prepare Compose environment
+        working-directory: infra/compose
+        run: |
+          cp .env.example .env
+
+      - name: Validate Compose configuration
+        working-directory: infra/compose
+        run: |
+          docker compose config --quiet
+
+      - name: Validate Prometheus configuration
+        working-directory: infra/compose
+        run: |
+          docker compose run \
+            --rm \
+            --no-deps \
+            --entrypoint promtool \
+            prometheus \
+            check config \
+            /etc/prometheus/prometheus.yml
+
+      - name: Validate Grafana dashboard JSON
+        working-directory: infra/compose
+        run: |
+          python3 -m json.tool \
+            grafana/dashboards/opssight-overview.json \
+            >/dev/null
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-24.04
+
+    needs:
+      - verify
+      - compose
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build OpsSight image
+        run: |
+          docker build \
+            --tag nexusops-opssight:${{ github.sha }} \
+            opssight
+
+      - name: Verify non-root image
+        run: |
+          image_user="$(
+            docker image inspect \
+              nexusops-opssight:${{ github.sha }} \
+              --format '{{.Config.User}}'
+          )"
+
+          test "$image_user" = "opssight"
+
+          docker run \
+            --rm \
+            --entrypoint id \
+            nexusops-opssight:${{ github.sha }} \
+            | grep -q 'uid=.*(opssight)'
+
+      - name: Create smoke test network
+        run: |
+          docker network create opssight-ci
+
+      - name: Start TimescaleDB
+        run: |
+          docker run \
+            --detach \
+            --name opssight-ci-db \
+            --network opssight-ci \
+            --env POSTGRES_DB=opssight \
+            --env POSTGRES_USER=opssight \
+            --env POSTGRES_PASSWORD=opssight_test_password \
+            --health-cmd="pg_isready -U opssight -d opssight" \
+            --health-interval=2s \
+            --health-timeout=5s \
+            --health-retries=30 \
+            timescale/timescaledb:2.29.2-pg18 \
+            postgres \
+            -c \
+            shared_preload_libraries=timescaledb
+
+      - name: Wait for TimescaleDB
+        run: |
+          for attempt in {1..30}; do
+            status="$(
+              docker inspect \
+                --format='{{.State.Health.Status}}' \
+                opssight-ci-db
+            )"
+
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs opssight-ci-db
+          exit 1
+
+      - name: Run database migrations
+        run: |
+          docker run \
+            --rm \
+            --network opssight-ci \
+            --env OPSSIGHT_DB_HOST=opssight-ci-db \
+            --env OPSSIGHT_DB_PORT=5432 \
+            --env OPSSIGHT_DB_NAME=opssight \
+            --env OPSSIGHT_DB_USER=opssight \
+            --env OPSSIGHT_DB_PASSWORD=opssight_test_password \
+            nexusops-opssight:${{ github.sha }} \
+            alembic upgrade head
+
+      - name: Start OpsSight
+        run: |
+          docker run \
+            --detach \
+            --name opssight-ci-app \
+            --network opssight-ci \
+            --publish 18000:8000 \
+            --env OPSSIGHT_DB_HOST=opssight-ci-db \
+            --env OPSSIGHT_DB_PORT=5432 \
+            --env OPSSIGHT_DB_NAME=opssight \
+            --env OPSSIGHT_DB_USER=opssight \
+            --env OPSSIGHT_DB_PASSWORD=opssight_test_password \
+            nexusops-opssight:${{ github.sha }}
+
+      - name: Smoke test OpsSight
+        run: |
+          for attempt in {1..45}; do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://127.0.0.1:18000/health
+            then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker logs opssight-ci-app
+          exit 1
+
+      - name: Verify state metrics
+        run: |
+          metrics="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://127.0.0.1:18000/metrics
+          )"
+
+          printf '%s\n' "$metrics" \
+            | grep -q \
+              '^opssight_state_metrics_collection_success 1.0$'
+
+          printf '%s\n' "$metrics" \
+            | grep -q \
+              '^opssight_open_alerts '
+
+          printf '%s\n' "$metrics" \
+            | grep -q \
+              '^opssight_open_security_findings '
+
+      - name: Scan OpsSight image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: nexusops-opssight:${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Show OpsSight logs
+        if: failure()
+        run: |
+          docker logs opssight-ci-app || true
+          docker logs opssight-ci-db || true
+
+      - name: Clean up containers
+        if: always()
+        run: |
+          docker rm -f opssight-ci-app || true
+          docker rm -f opssight-ci-db || true
+          docker network rm opssight-ci || true

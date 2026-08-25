@@ -16,7 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from opssight.models.base import Base
 
-
 if TYPE_CHECKING:
     from opssight.models.alert_rule import AlertRule
     from opssight.models.host import Host

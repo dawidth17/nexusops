@@ -16,7 +16,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from opssight.models.base import Base
 from opssight.models.enums import SecurityFindingStatus
 
-
 if TYPE_CHECKING:
     from opssight.models.runbook import Runbook
     from opssight.models.security_rule import SecurityRule

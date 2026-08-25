@@ -3,8 +3,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -12,7 +10,7 @@ from opssight.api.dependencies import get_session
 from opssight.auth.dependencies import get_current_principal
 from opssight.auth.models import Principal, Role
 from opssight.config import settings
-from opssight.database import SessionFactory, engine
+from opssight.database import SessionFactory
 from opssight.main import app
 from opssight.models.enums import (
     AlertSeverity,
@@ -21,7 +19,6 @@ from opssight.models.enums import (
 from opssight.models.runbook import Runbook
 from opssight.models.security_finding import SecurityFinding
 from opssight.models.security_rule import SecurityRule
-
 
 pytestmark = pytest.mark.skipif(
     not settings.db_name.endswith("_test"),

@@ -14,13 +14,12 @@ from opssight.alerting.engine import (
 )
 from opssight.checks.result import CheckResult
 from opssight.config import settings
-from opssight.database import SessionFactory, engine
+from opssight.database import SessionFactory
 from opssight.models.alert import Alert
 from opssight.models.alert_rule import AlertRule
 from opssight.models.check import Check
 from opssight.models.enums import AlertSeverity, AlertStatus
 from opssight.models.host import Host
-
 
 database_test = pytest.mark.skipif(
     not settings.db_name.endswith("_test"),

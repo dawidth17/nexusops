@@ -15,7 +15,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from opssight.database import SessionFactory
 from opssight.models import Alert, SecurityFinding
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -11,7 +11,6 @@ from opssight.config import settings
 from opssight.logging_config import configure_logging
 from opssight.metrics import record_http_metrics
 
-
 configure_logging(
     settings.log_level
 )

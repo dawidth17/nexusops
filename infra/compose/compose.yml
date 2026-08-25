@@ -79,6 +79,140 @@ services:
       retries: 12
       start_period: 15s
 
+  opssight-migrate:
+    build:
+      context: ../../opssight
+
+    image: nexusops-opssight:dev
+
+    command:
+      - alembic
+      - upgrade
+      - head
+
+    environment:
+      OPSSIGHT_DB_HOST: opssight-db
+      OPSSIGHT_DB_PORT: "5432"
+      OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
+      OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
+      OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+
+    networks:
+      - backend
+
+    depends_on:
+      opssight-db:
+        condition: service_healthy
+
+    restart: "no"
+
+  opssight-api:
+    build:
+      context: ../../opssight
+
+    image: nexusops-opssight:dev
+
+    environment:
+      OPSSIGHT_DB_HOST: opssight-db
+      OPSSIGHT_DB_PORT: "5432"
+      OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
+      OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
+      OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+      OPSSIGHT_RABBITMQ_HOST: rabbitmq
+      OPSSIGHT_RABBITMQ_PORT: "5672"
+      OPSSIGHT_RABBITMQ_USER: ${OPSSIGHT_RABBITMQ_USER}
+      OPSSIGHT_RABBITMQ_PASSWORD: ${OPSSIGHT_RABBITMQ_PASSWORD}
+
+    ports:
+      - "127.0.0.1:${OPSSIGHT_API_PORT}:8000"
+
+    networks:
+      - backend
+
+    depends_on:
+      opssight-migrate:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  opssight-worker:
+    build:
+      context: ../../opssight
+
+    image: nexusops-opssight:dev
+
+    command:
+      - celery
+      - -A
+      - opssight.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+
+    environment:
+      OPSSIGHT_DB_HOST: opssight-db
+      OPSSIGHT_DB_PORT: "5432"
+      OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
+      OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
+      OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+      OPSSIGHT_RABBITMQ_HOST: rabbitmq
+      OPSSIGHT_RABBITMQ_PORT: "5672"
+      OPSSIGHT_RABBITMQ_USER: ${OPSSIGHT_RABBITMQ_USER}
+      OPSSIGHT_RABBITMQ_PASSWORD: ${OPSSIGHT_RABBITMQ_PASSWORD}
+
+    networks:
+      - backend
+
+    depends_on:
+      opssight-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+
+  opssight-scheduler:
+    build:
+      context: ../../opssight
+
+    image: nexusops-opssight:dev
+
+    command:
+      - celery
+      - -A
+      - opssight.celery_app:celery_app
+      - beat
+      - --loglevel=INFO
+      - --schedule=/tmp/celerybeat-schedule
+
+    environment:
+      OPSSIGHT_DB_HOST: opssight-db
+      OPSSIGHT_DB_PORT: "5432"
+      OPSSIGHT_DB_NAME: ${OPSSIGHT_DB_NAME}
+      OPSSIGHT_DB_USER: ${OPSSIGHT_DB_USER}
+      OPSSIGHT_DB_PASSWORD: ${OPSSIGHT_DB_PASSWORD}
+      OPSSIGHT_RABBITMQ_HOST: rabbitmq
+      OPSSIGHT_RABBITMQ_PORT: "5672"
+      OPSSIGHT_RABBITMQ_USER: ${OPSSIGHT_RABBITMQ_USER}
+      OPSSIGHT_RABBITMQ_PASSWORD: ${OPSSIGHT_RABBITMQ_PASSWORD}
+
+    networks:
+      - backend
+
+    depends_on:
+      opssight-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+
   prometheus:
     image: prom/prometheus:v3.14.0
 
@@ -93,11 +227,12 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
 
-    extra_hosts:
-      - "host.docker.internal:${OPSSIGHT_HOST_IP:-host-gateway}"
-
     networks:
       - backend
+
+    depends_on:
+      opssight-api:
+        condition: service_healthy
 
   grafana:
     image: grafana/grafana:13.2.0

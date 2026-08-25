@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opssight.config import settings
-from opssight.database import SessionFactory, engine
+from opssight.database import SessionFactory
 from opssight.models.enums import (
     AlertSeverity,
     SecurityFindingStatus,
@@ -20,7 +20,6 @@ from opssight.security.engine import (
     process_security_signal,
     resolve_security_finding,
 )
-
 
 pytestmark = pytest.mark.skipif(
     not settings.db_name.endswith("_test"),

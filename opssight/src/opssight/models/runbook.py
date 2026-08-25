@@ -7,7 +7,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from opssight.models.base import Base
 
-
 if TYPE_CHECKING:
     from opssight.models.security_finding import SecurityFinding
     from opssight.models.security_rule import SecurityRule

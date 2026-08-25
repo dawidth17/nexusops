@@ -16,7 +16,6 @@ from opssight.schemas.security_finding import (
 )
 from opssight.security.engine import resolve_security_finding
 
-
 router = APIRouter()
 
 

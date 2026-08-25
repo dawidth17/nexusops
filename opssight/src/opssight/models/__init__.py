@@ -8,7 +8,6 @@ from opssight.models.security_rule import SecurityRule
 from opssight.models.security_signal import SecuritySignal
 from opssight.models.telemetry import Telemetry
 
-
 __all__ = [
     "Alert",
     "AlertRule",

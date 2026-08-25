@@ -57,7 +57,10 @@ async def run_dns_check(
         started_at=started_at,
         duration_ms=duration_ms,
         message=(
-            f"dns resolution succeeded for {host}: "
-            f"{', '.join(addresses)}"
+            f"dns resolution succeded for {host}: "
+            f"{', '.join(
+                str(address)
+                for address in addresses
+                )}"
         ),
     )

@@ -377,6 +377,8 @@ jobs:
         run: |
           cppcheck \
             --project=sentinel-agent/build-analysis/compile_commands.json \
+            -isentinel-agent/build-analysis/generated \
+            --suppress='preprocessorErrorDirective:sentinel-agent/build-analysis/generated/nexusops/telemetry/v1/telemetry.pb.h' \
             --enable=warning,performance,portability \
             --error-exitcode=1 \
             --inline-suppr \

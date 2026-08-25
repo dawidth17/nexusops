@@ -2,11 +2,13 @@
 
 SentinelAgent is the Linux monitoring agent used by NexusOps.
 
-The project is split into three main parts:
+The project is split into five main parts:
 
 - `libsysprobe` - a C17 library for low-level Linux system data collection
 - `sentinel_runtime` - C++20 scheduling, concurrency, lifecycle and network diagnostics
 - `sentinel_storage` - C++20 SQLite durable telemetry buffering
+- `sentinel_telemetry_codec` - Protobuf serialization for collected telemetry
+- `sentinel_grpc_transport` - gRPC delivery to OpsSight with acknowledgement and retry support
 
 ## Current collectors
 
@@ -26,7 +28,7 @@ The collectors do not execute shell commands to obtain core metrics.
 
 The C++ runtime contains a fixed-size thread pool with a bounded work queue.
 
-The scheduler submits periodic collector tasks to the pool.
+The scheduler submits periodic collector and telemetry transport tasks to the pool.
 
 The bounded queue prevents unlimited in-memory growth when work is produced faster than workers can process it.
 
@@ -34,13 +36,99 @@ Missed scheduler intervals are skipped instead of being submitted as a large cat
 
 ## SQLite durable spool
 
-Collected telemetry is stored in a local SQLite spool.
+Collected telemetry is serialized as Protobuf and stored in a local SQLite spool before transmission.
 
-Each record contains an increasing sequence number, UTC capture time, telemetry kind and telemetry payload.
+Each record contains:
+
+- an increasing sequence number
+- UTC capture time
+- telemetry kind
+- payload format
+- binary telemetry payload
 
 The spool is bounded and its schema is versioned.
 
-Telemetry remains stored across agent restarts until a later transport milestone acknowledges it.
+Records survive agent restarts and transport failures.
+
+Records are removed only after OpsSight acknowledges the corresponding telemetry batch.
+
+This allows the agent to continue collecting data while OpsSight is unavailable and resend the stored records later.
+
+## OpsSight telemetry transport
+
+SentinelAgent sends telemetry to OpsSight using the shared `telemetry.v1` gRPC contract.
+
+The default endpoint is:
+
+```text
+127.0.0.1:50051
+```
+
+It can be changed with:
+
+```text
+NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT
+```
+
+The agent sends a heartbeat before telemetry delivery.
+
+The heartbeat contains:
+
+- agent ID
+- hostname
+- agent version
+
+The default agent ID is derived from the local hostname:
+
+```text
+sentinel-<hostname>
+```
+
+It can be overridden with:
+
+```text
+NEXUSOPS_SENTINEL_AGENT_ID
+```
+
+The hostname can also be overridden with:
+
+```text
+NEXUSOPS_SENTINEL_HOSTNAME
+```
+
+Telemetry is read from SQLite in sequence order and sent in bounded batches.
+
+A batch is deleted from the spool only after an acknowledgement containing the expected batch ID and sequence number is received.
+
+If delivery fails before acknowledgement, the records remain in SQLite.
+
+The next transport attempt reads the same records again and retransmits the same deterministic batch.
+
+This provides durable retry behavior without losing telemetry when OpsSight is temporarily unavailable.
+
+## Telemetry flow
+
+```text
+collectors
+    |
+    v
+protobuf encoding
+    |
+    v
+sqlite spool
+    |
+    v
+grpc transport
+    |
+    v
+opssight
+    |
+    v
+ack
+    |
+    v
+sqlite acknowledgement
+```
 
 ## Lifecycle
 
@@ -50,7 +138,9 @@ SentinelAgent runs as a long-lived Linux service.
 
 `SIGHUP` is consumed as a reload request.
 
-Shutdown stops the scheduler, drains accepted worker tasks and closes SQLite cleanly.
+Shutdown stops the scheduler, drains accepted worker tasks and performs a final telemetry flush attempt before the SQLite spool is closed.
+
+A transport failure does not terminate the agent.
 
 ## Network diagnostics
 
@@ -119,10 +209,19 @@ The CI pipeline includes:
 
 ```text
 regular build and tests
+gRPC transport tests
+offline spool and retry validation
 AddressSanitizer + UndefinedBehaviorSanitizer
 clang-tidy + cppcheck
 Debian package build and installation smoke test
 ```
+
+The gRPC transport tests verify:
+
+- successful telemetry acknowledgement
+- retention of records when OpsSight is unavailable
+- reconnect and ordered retransmission
+- stable batch IDs across retry attempts
 
 AddressSanitizer is used to detect memory-safety errors.
 
@@ -191,6 +290,32 @@ Package removal preserves the configuration file.
 Package purge removes the configuration file.
 
 The SQLite state directory is not automatically deleted during package removal or purge.
+
+## Agent configuration
+
+The packaged configuration file is:
+
+```text
+/etc/nexusops-sentinel/sentinel.conf
+```
+
+The default configuration contains:
+
+```text
+NEXUSOPS_SENTINEL_SPOOL_PATH=/var/lib/nexusops-sentinel/telemetry.db
+NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:50051
+```
+
+The following environment variables are supported:
+
+```text
+NEXUSOPS_SENTINEL_SPOOL_PATH
+NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT
+NEXUSOPS_SENTINEL_AGENT_ID
+NEXUSOPS_SENTINEL_HOSTNAME
+```
+
+The agent ID and hostname overrides are optional.
 
 ## Installing the package
 
@@ -359,6 +484,68 @@ The value can be overridden through:
 /etc/nexusops-sentinel/sentinel.conf
 ```
 
+## Offline behavior
+
+OpsSight does not need to be available for SentinelAgent to continue collecting telemetry.
+
+For a local offline test:
+
+```bash
+NEXUSOPS_SENTINEL_SPOOL_PATH=/tmp/nexusops-sentinel-offline.db \
+NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:59999 \
+./sentinel-agent/build/sentinel-agent \
+  --run-seconds 7
+```
+
+The output should contain:
+
+```text
+transport status=transport_error
+```
+
+The SQLite spool should still contain telemetry records after the process exits.
+
+## Local OpsSight integration
+
+Start OpsSight first:
+
+```bash
+cd opssight
+
+uv run uvicorn opssight.main:app
+```
+
+Then, from the repository root, run SentinelAgent:
+
+```bash
+NEXUSOPS_SENTINEL_SPOOL_PATH=/tmp/nexusops-sentinel-e2e.db \
+NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:50051 \
+NEXUSOPS_SENTINEL_AGENT_ID=sentinel-local \
+NEXUSOPS_SENTINEL_HOSTNAME=sentinel-local-host \
+./sentinel-agent/build/sentinel-agent \
+  --run-seconds 12
+```
+
+Successful delivery produces output similar to:
+
+```text
+transport status=ok sent_records=2 acknowledged_records=2
+```
+
+After successful acknowledgement, the spool should be empty:
+
+```bash
+sqlite3 \
+  /tmp/nexusops-sentinel-e2e.db \
+  "SELECT COUNT(*) FROM telemetry_spool;"
+```
+
+Expected result:
+
+```text
+0
+```
+
 ## Requirements
 
 - Linux
@@ -367,12 +554,26 @@ The value can be overridden through:
 - Ninja
 - SQLite 3 development library
 - OpenSSL development library
+- Protobuf development library and compiler
+- gRPC C++ development library
+- gRPC Protobuf compiler plugin
 - pthreads
 - clang-tidy for static analysis
 - cppcheck for static analysis
 - dpkg tools for Debian packaging
 
+On Ubuntu, the telemetry transport dependencies include:
+
+```text
+libgrpc++-dev
+libprotobuf-dev
+protobuf-compiler
+protobuf-compiler-grpc
+```
+
 ## Run interactively
+
+From the repository root:
 
 ```bash
 ./sentinel-agent/build/sentinel-agent

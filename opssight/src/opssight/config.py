@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     rabbitmq_user: str = "opssight"
     rabbitmq_password: SecretStr = SecretStr("change_me")
 
+    grpc_host: str = "0.0.0.0"
+    grpc_port: int = 50051
+    grpc_max_workers: int = 10
+
     model_config = SettingsConfigDict(
         env_prefix="OPSSIGHT_",
         case_sensitive=False,

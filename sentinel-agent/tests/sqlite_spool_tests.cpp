@@ -1,5 +1,6 @@
 #include "nexusops/agent/sqlite_spool.h"
 
+#include <sqlite3.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -17,6 +18,7 @@ namespace {
 using nexusops::agent::SQLiteSpool;
 using nexusops::agent::SpoolStatus;
 using nexusops::agent::TelemetryRecord;
+using nexusops::agent::TelemetryPayloadFormat;
 
 std::atomic<std::uint64_t>
     nextDatabaseId{0};
@@ -708,6 +710,370 @@ TEST(
                 sequence
         );
     }
+}
+
+TEST(
+    SQLiteSpoolTests,
+    preservesBinaryProtobufPayload
+)
+{
+    TemporarySpoolFile file;
+
+    SQLiteSpool spool(
+        file.path(),
+        10
+    );
+
+    std::string payload;
+
+    payload.push_back(
+        static_cast<char>(0x08)
+    );
+
+    payload.push_back(
+        static_cast<char>(0x96)
+    );
+
+    payload.push_back(
+        static_cast<char>(0x01)
+    );
+
+    payload.push_back(
+        '\0'
+    );
+
+    payload.push_back(
+        static_cast<char>(0x10)
+    );
+
+    payload.push_back(
+        static_cast<char>(0x01)
+    );
+
+    std::int64_t sequence = 0;
+
+    ASSERT_EQ(
+        spool.enqueueProtobuf(
+            "2026-08-25T12:00:00Z",
+            "system",
+            payload,
+            &sequence
+        ),
+        SpoolStatus::ok
+    );
+
+    ASSERT_GT(
+        sequence,
+        0
+    );
+
+    std::vector<
+        TelemetryRecord
+    > records;
+
+    ASSERT_EQ(
+        spool.peekOldest(
+            10,
+            records
+        ),
+        SpoolStatus::ok
+    );
+
+    ASSERT_EQ(
+        records.size(),
+        1U
+    );
+
+    EXPECT_EQ(
+        records[0].payloadFormat,
+        TelemetryPayloadFormat::
+            protobuf
+    );
+
+    EXPECT_EQ(
+        records[0].payload.size(),
+        payload.size()
+    );
+
+    EXPECT_EQ(
+        records[0].payload,
+        payload
+    );
+}
+
+TEST(
+    SQLiteSpoolTests,
+    legacyEnqueueKeepsLegacyPayloadFormat
+)
+{
+    TemporarySpoolFile file;
+
+    SQLiteSpool spool(
+        file.path(),
+        10
+    );
+
+    std::int64_t sequence = 0;
+
+    ASSERT_EQ(
+        spool.enqueue(
+            "2026-08-25T12:00:00Z",
+            "system",
+            "cpu=10",
+            &sequence
+        ),
+        SpoolStatus::ok
+    );
+
+    std::vector<
+        TelemetryRecord
+    > records;
+
+    ASSERT_EQ(
+        spool.peekOldest(
+            10,
+            records
+        ),
+        SpoolStatus::ok
+    );
+
+    ASSERT_EQ(
+        records.size(),
+        1U
+    );
+
+    EXPECT_EQ(
+        records[0].payloadFormat,
+        TelemetryPayloadFormat::
+            legacy_text
+    );
+
+    EXPECT_EQ(
+        records[0].payload,
+        "cpu=10"
+    );
+}
+
+TEST(
+    SQLiteSpoolTests,
+    protobufPayloadSurvivesReopen
+)
+{
+    TemporarySpoolFile file;
+
+    std::string payload;
+
+    payload.push_back(
+        static_cast<char>(0x08)
+    );
+
+    payload.push_back(
+        '\0'
+    );
+
+    payload.push_back(
+        static_cast<char>(0x10)
+    );
+
+    std::int64_t sequence = 0;
+
+    {
+        SQLiteSpool spool(
+            file.path(),
+            10
+        );
+
+        ASSERT_EQ(
+            spool.enqueueProtobuf(
+                "2026-08-25T12:00:00Z",
+                "network",
+                payload,
+                &sequence
+            ),
+            SpoolStatus::ok
+        );
+    }
+
+    {
+        SQLiteSpool spool(
+            file.path(),
+            10
+        );
+
+        std::vector<
+            TelemetryRecord
+        > records;
+
+        ASSERT_EQ(
+            spool.peekOldest(
+                10,
+                records
+            ),
+            SpoolStatus::ok
+        );
+
+        ASSERT_EQ(
+            records.size(),
+            1U
+        );
+
+        EXPECT_EQ(
+            records[0].sequence,
+            sequence
+        );
+
+        EXPECT_EQ(
+            records[0].payloadFormat,
+            TelemetryPayloadFormat::
+                protobuf
+        );
+
+        EXPECT_EQ(
+            records[0].payload,
+            payload
+        );
+    }
+}
+
+TEST(
+    SQLiteSpoolTests,
+    migratesVersionOneDatabase
+)
+{
+    TemporarySpoolFile file;
+
+    sqlite3 *database = nullptr;
+
+    ASSERT_EQ(
+        sqlite3_open(
+            file.path().c_str(),
+            &database
+        ),
+        SQLITE_OK
+    );
+
+    const char *legacySql =
+        "CREATE TABLE telemetry_spool("
+        "sequence INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "captured_at_utc TEXT NOT NULL,"
+        "kind TEXT NOT NULL "
+        "CHECK(length(kind) BETWEEN 1 AND 64),"
+        "payload TEXT NOT NULL"
+        ");"
+        "INSERT INTO telemetry_spool("
+        "captured_at_utc, kind, payload"
+        ") VALUES ("
+        "'2026-08-18T12:00:00Z',"
+        "'system',"
+        "'cpu=15'"
+        ");"
+        "INSERT INTO telemetry_spool("
+        "captured_at_utc, kind, payload"
+        ") VALUES ("
+        "'2026-08-18T12:00:01Z',"
+        "'network',"
+        "'rx=500'"
+        ");"
+        "PRAGMA user_version=1;";
+
+    char *errorMessage = nullptr;
+
+    ASSERT_EQ(
+        sqlite3_exec(
+            database,
+            legacySql,
+            nullptr,
+            nullptr,
+            &errorMessage
+        ),
+        SQLITE_OK
+    ) << (
+        errorMessage != nullptr
+            ? errorMessage
+            : ""
+    );
+
+    if (
+        errorMessage !=
+        nullptr
+    ) {
+        sqlite3_free(
+            errorMessage
+        );
+    }
+
+    ASSERT_EQ(
+        sqlite3_close(
+            database
+        ),
+        SQLITE_OK
+    );
+
+    SQLiteSpool spool(
+        file.path(),
+        10
+    );
+
+    EXPECT_EQ(
+        spool.currentSchemaVersion(),
+        2
+    );
+
+    std::vector<
+        TelemetryRecord
+    > records;
+
+    ASSERT_EQ(
+        spool.peekOldest(
+            10,
+            records
+        ),
+        SpoolStatus::ok
+    );
+
+    ASSERT_EQ(
+        records.size(),
+        2U
+    );
+
+    EXPECT_EQ(
+        records[0].payloadFormat,
+        TelemetryPayloadFormat::
+            legacy_text
+    );
+
+    EXPECT_EQ(
+        records[1].payloadFormat,
+        TelemetryPayloadFormat::
+            legacy_text
+    );
+
+    EXPECT_EQ(
+        records[0].payload,
+        "cpu=15"
+    );
+
+    EXPECT_EQ(
+        records[1].payload,
+        "rx=500"
+    );
+
+    std::int64_t newSequence = 0;
+
+    ASSERT_EQ(
+        spool.enqueueProtobuf(
+            "2026-08-18T12:00:02Z",
+            "system",
+            "protobuf",
+            &newSequence
+        ),
+        SpoolStatus::ok
+    );
+
+    EXPECT_GT(
+        newSequence,
+        records.back().sequence
+    );
 }
 
 }

@@ -26,10 +26,32 @@ def get_host_by_id(
     session: Session,
     host_id: UUID,
 ) -> Host | None:
-    return session.get(Host, host_id)
+    return session.get(
+        Host,
+        host_id,
+    )
 
 
-def list_hosts(session: Session) -> list[Host]:
-    statement = select(Host).order_by(Host.name)
+def get_host_by_name(
+    session: Session,
+    name: str,
+) -> Host | None:
+    statement = select(Host).where(
+        Host.name == name
+    )
 
-    return list(session.scalars(statement).all())
+    return session.scalar(
+        statement
+    )
+
+
+def list_hosts(
+    session: Session,
+) -> list[Host]:
+    statement = select(Host).order_by(
+        Host.name
+    )
+
+    return list(
+        session.scalars(statement).all()
+    )

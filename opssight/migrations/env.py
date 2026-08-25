@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, pool
 
 from opssight.database import build_database_url
 from opssight.models import (
+    Agent,
     Alert,
     AlertRule,
     Check,
@@ -14,6 +15,7 @@ from opssight.models import (
     SecurityRule,
     SecuritySignal,
     Telemetry,
+    TelemetryBatch,
 )
 from opssight.models.base import Base
 
@@ -26,6 +28,7 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 _ = (
+    Agent,
     Alert,
     AlertRule,
     Check,
@@ -35,6 +38,7 @@ _ = (
     SecurityRule,
     SecuritySignal,
     Telemetry,
+    TelemetryBatch,
 )
 
 

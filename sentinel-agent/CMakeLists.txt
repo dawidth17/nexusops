@@ -98,6 +98,132 @@ find_package(
     REQUIRED
 )
 
+find_package(
+    Protobuf
+    REQUIRED
+)
+
+find_package(
+    PkgConfig
+    REQUIRED
+)
+
+pkg_check_modules(
+    GRPCPP
+    REQUIRED
+    IMPORTED_TARGET
+    grpc++
+)
+
+find_program(
+    GRPC_CPP_PLUGIN
+    grpc_cpp_plugin
+    REQUIRED
+)
+
+find_path(
+    PROTOBUF_WKT_ROOT
+    google/protobuf/timestamp.proto
+    PATHS
+        ${Protobuf_INCLUDE_DIRS}
+    REQUIRED
+)
+
+set(
+    NEXUSOPS_CONTRACT_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../contracts/protobuf"
+)
+
+set(
+    TELEMETRY_PROTO
+    "${NEXUSOPS_CONTRACT_ROOT}/nexusops/telemetry/v1/telemetry.proto"
+)
+
+if(NOT EXISTS "${TELEMETRY_PROTO}")
+    message(
+        FATAL_ERROR
+        "NexusOps telemetry contract was not found"
+    )
+endif()
+
+set(
+    TELEMETRY_GENERATED_ROOT
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
+
+set(
+    TELEMETRY_GENERATED_DIRECTORY
+    "${TELEMETRY_GENERATED_ROOT}/nexusops/telemetry/v1"
+)
+
+set(
+    TELEMETRY_PROTO_SOURCE
+    "${TELEMETRY_GENERATED_DIRECTORY}/telemetry.pb.cc"
+)
+
+set(
+    TELEMETRY_PROTO_HEADER
+    "${TELEMETRY_GENERATED_DIRECTORY}/telemetry.pb.h"
+)
+
+set(
+    TELEMETRY_GRPC_SOURCE
+    "${TELEMETRY_GENERATED_DIRECTORY}/telemetry.grpc.pb.cc"
+)
+
+set(
+    TELEMETRY_GRPC_HEADER
+    "${TELEMETRY_GENERATED_DIRECTORY}/telemetry.grpc.pb.h"
+)
+
+add_custom_command(
+    OUTPUT
+        "${TELEMETRY_PROTO_SOURCE}"
+        "${TELEMETRY_PROTO_HEADER}"
+        "${TELEMETRY_GRPC_SOURCE}"
+        "${TELEMETRY_GRPC_HEADER}"
+
+    COMMAND
+        ${CMAKE_COMMAND}
+        -E
+        make_directory
+        "${TELEMETRY_GENERATED_DIRECTORY}"
+
+    COMMAND
+        "${Protobuf_PROTOC_EXECUTABLE}"
+        "--proto_path=${NEXUSOPS_CONTRACT_ROOT}"
+        "--proto_path=${PROTOBUF_WKT_ROOT}"
+        "--cpp_out=${TELEMETRY_GENERATED_ROOT}"
+        "--grpc_out=${TELEMETRY_GENERATED_ROOT}"
+        "--plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}"
+        "${TELEMETRY_PROTO}"
+
+    DEPENDS
+        "${TELEMETRY_PROTO}"
+
+    VERBATIM
+)
+
+add_library(
+    nexusops_telemetry_contract
+    STATIC
+    "${TELEMETRY_PROTO_SOURCE}"
+    "${TELEMETRY_GRPC_SOURCE}"
+)
+
+target_include_directories(
+    nexusops_telemetry_contract
+    PUBLIC
+        "${TELEMETRY_GENERATED_ROOT}"
+)
+
+target_link_libraries(
+    nexusops_telemetry_contract
+    PUBLIC
+        protobuf::libprotobuf
+        PkgConfig::GRPCPP
+)
+
 add_library(
     sysprobe
     STATIC
@@ -170,6 +296,53 @@ sentinel_apply_target_options(
     sentinel_storage
 )
 
+add_library(
+    sentinel_telemetry_codec
+    STATIC
+    src/telemetry_codec.cpp
+)
+
+target_include_directories(
+    sentinel_telemetry_codec
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(
+    sentinel_telemetry_codec
+    PUBLIC
+        sysprobe
+        nexusops_telemetry_contract
+)
+
+sentinel_apply_target_options(
+    sentinel_telemetry_codec
+)
+
+add_library(
+    sentinel_grpc_transport
+    STATIC
+    src/grpc_telemetry_client.cpp
+)
+
+target_include_directories(
+    sentinel_grpc_transport
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(
+    sentinel_grpc_transport
+    PUBLIC
+        sentinel_storage
+        nexusops_telemetry_contract
+        PkgConfig::GRPCPP
+)
+
+sentinel_apply_target_options(
+    sentinel_grpc_transport
+)
+
 add_executable(
     sentinel-agent
     app/main.cpp
@@ -181,6 +354,8 @@ target_link_libraries(
         sysprobe
         sentinel_runtime
         sentinel_storage
+        sentinel_telemetry_codec
+        sentinel_grpc_transport
 )
 
 target_compile_definitions(
@@ -199,9 +374,12 @@ if(SENTINEL_BUILD_TESTS)
 
     FetchContent_Declare(
         googletest
-        GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG v1.18.0
-        GIT_SHALLOW TRUE
+        GIT_REPOSITORY
+            https://github.com/google/googletest.git
+        GIT_TAG
+            v1.18.0
+        GIT_SHALLOW
+            TRUE
     )
 
     FetchContent_MakeAvailable(googletest)
@@ -277,6 +455,41 @@ if(SENTINEL_BUILD_TESTS)
         sentinel_storage_tests
     )
 
+    add_executable(
+        sentinel_telemetry_codec_tests
+        tests/telemetry_codec_tests.cpp
+    )
+
+    target_link_libraries(
+        sentinel_telemetry_codec_tests
+        PRIVATE
+            sentinel_telemetry_codec
+            sentinel_storage
+            GTest::gtest_main
+    )
+
+    sentinel_apply_target_options(
+        sentinel_telemetry_codec_tests
+    )
+
+    add_executable(
+        sentinel_grpc_transport_tests
+        tests/grpc_telemetry_client_tests.cpp
+    )
+
+    target_link_libraries(
+        sentinel_grpc_transport_tests
+        PRIVATE
+            sentinel_grpc_transport
+            sentinel_storage
+            nexusops_telemetry_contract
+            GTest::gtest_main
+    )
+
+    sentinel_apply_target_options(
+        sentinel_grpc_transport_tests
+    )
+
     include(GoogleTest)
 
     gtest_discover_tests(
@@ -289,6 +502,14 @@ if(SENTINEL_BUILD_TESTS)
 
     gtest_discover_tests(
         sentinel_storage_tests
+    )
+
+    gtest_discover_tests(
+        sentinel_telemetry_codec_tests
+    )
+
+    gtest_discover_tests(
+        sentinel_grpc_transport_tests
     )
 endif()
 

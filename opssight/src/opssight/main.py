@@ -8,6 +8,7 @@ from starlette.responses import Response
 
 from opssight.api.v1.router import router as api_v1_router
 from opssight.config import settings
+from opssight.grpc.server import create_grpc_server
 from opssight.logging_config import configure_logging
 from opssight.metrics import record_http_metrics
 
@@ -30,15 +31,43 @@ async def lifespan(
         },
     )
 
-    yield
+    grpc_server, grpc_port = create_grpc_server()
+
+    grpc_server.start()
 
     logger.info(
-        "application_shutdown",
+        "grpc_server_started",
         extra={
-            "service": settings.service_name,
-            "environment": settings.environment,
+            "host": settings.grpc_host,
+            "port": grpc_port,
         },
     )
+
+    try:
+        yield
+
+    finally:
+        grpc_shutdown = grpc_server.stop(
+            grace=5
+        )
+
+        grpc_shutdown.wait()
+
+        logger.info(
+            "grpc_server_stopped",
+            extra={
+                "host": settings.grpc_host,
+                "port": grpc_port,
+            },
+        )
+
+        logger.info(
+            "application_shutdown",
+            extra={
+                "service": settings.service_name,
+                "environment": settings.environment,
+            },
+        )
 
 
 app = FastAPI(
@@ -51,6 +80,7 @@ app.include_router(
     api_v1_router,
     prefix="/api/v1",
 )
+
 
 @app.middleware("http")
 async def metrics_middleware(
@@ -70,6 +100,7 @@ def health() -> dict[str, str]:
         "service": settings.service_name,
         "environment": settings.environment,
     }
+
 
 @app.get(
     "/metrics",

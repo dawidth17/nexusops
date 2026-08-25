@@ -1,8 +1,10 @@
 #include "nexusops/agent/bounded_thread_pool.h"
 #include "nexusops/agent/diagnostic_cli.h"
+#include "nexusops/agent/grpc_telemetry_client.h"
 #include "nexusops/agent/scheduler.h"
 #include "nexusops/agent/signal_waiter.h"
 #include "nexusops/agent/sqlite_spool.h"
+#include "nexusops/agent/telemetry_codec.h"
 #include "nexusops/sysprobe.h"
 
 #include <atomic>
@@ -22,18 +24,27 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include <signal.h>
+#include <unistd.h>
 
 namespace {
 
 using nexusops::agent::BoundedThreadPool;
+using nexusops::agent::GrpcTelemetryClient;
+using nexusops::agent::GrpcTelemetryClientOptions;
 using nexusops::agent::Scheduler;
 using nexusops::agent::SignalEventType;
 using nexusops::agent::SignalWaiter;
 using nexusops::agent::SQLiteSpool;
 using nexusops::agent::SpoolStatus;
+using nexusops::agent::TelemetryFlushStatus;
+using nexusops::agent::encodeNetworkSnapshot;
+using nexusops::agent::encodeProcessSnapshot;
+using nexusops::agent::encodeSystemMetrics;
 
 struct RuntimeOptions {
     std::optional<
@@ -179,6 +190,84 @@ std::string resolveSpoolPath()
         "/tmp/nexusops-sentinel-telemetry.db";
 }
 
+std::string resolveHostname()
+{
+    const char *configuredHostname =
+        std::getenv(
+            "NEXUSOPS_SENTINEL_HOSTNAME"
+        );
+
+    if (
+        configuredHostname != nullptr &&
+        configuredHostname[0] != '\0'
+    ) {
+        return configuredHostname;
+    }
+
+    char hostname[256]{};
+
+    if (
+        gethostname(
+            hostname,
+            sizeof(hostname) - 1
+        ) != 0
+    ) {
+        throw std::runtime_error(
+            "failed to resolve local hostname"
+        );
+    }
+
+    hostname[
+        sizeof(hostname) - 1
+    ] = '\0';
+
+    if (hostname[0] == '\0') {
+        throw std::runtime_error(
+            "local hostname is empty"
+        );
+    }
+
+    return hostname;
+}
+
+std::string resolveAgentId(
+    const std::string &hostname
+)
+{
+    const char *configuredAgentId =
+        std::getenv(
+            "NEXUSOPS_SENTINEL_AGENT_ID"
+        );
+
+    if (
+        configuredAgentId != nullptr &&
+        configuredAgentId[0] != '\0'
+    ) {
+        return configuredAgentId;
+    }
+
+    return
+        "sentinel-" +
+        hostname;
+}
+
+std::string resolveOpsSightEndpoint()
+{
+    const char *configuredEndpoint =
+        std::getenv(
+            "NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT"
+        );
+
+    if (
+        configuredEndpoint != nullptr &&
+        configuredEndpoint[0] != '\0'
+    ) {
+        return configuredEndpoint;
+    }
+
+    return "127.0.0.1:50051";
+}
+
 void ensureSpoolDirectory(
     const std::string &spoolPath
 )
@@ -226,6 +315,42 @@ const char *signalName(
         default:
             return "UNKNOWN";
     }
+}
+
+const char *telemetryFlushStatusName(
+    TelemetryFlushStatus status
+)
+{
+    switch (status) {
+        case TelemetryFlushStatus::ok:
+            return "ok";
+
+        case TelemetryFlushStatus::
+            nothing_to_send:
+            return "nothing_to_send";
+
+        case TelemetryFlushStatus::
+            transport_error:
+            return "transport_error";
+
+        case TelemetryFlushStatus::
+            protocol_error:
+            return "protocol_error";
+
+        case TelemetryFlushStatus::
+            spool_error:
+            return "spool_error";
+
+        case TelemetryFlushStatus::
+            invalid_payload:
+            return "invalid_payload";
+
+        case TelemetryFlushStatus::
+            backoff:
+            return "backoff";
+    }
+
+    return "unknown";
 }
 
 std::string utcNow()
@@ -392,7 +517,7 @@ void persistTelemetry(
     std::int64_t sequence = 0;
 
     const auto status =
-        spool.enqueue(
+        spool.enqueueProtobuf(
             utcNow(),
             kind,
             payload,
@@ -414,73 +539,6 @@ void persistTelemetry(
     ) {
         ++spoolErrorCount;
     }
-}
-
-std::string buildSystemPayload(
-    double cpuUsagePercent,
-    const sysprobe_memory_info &memory,
-    const sysprobe_filesystem_info
-        &filesystem,
-    const sysprobe_uptime_info &uptime
-)
-{
-    std::ostringstream payload;
-
-    payload
-        << std::fixed
-        << std::setprecision(2)
-        << "cpu_usage_percent="
-        << cpuUsagePercent
-        << ";memory_used_bytes="
-        << memory.used_bytes
-        << ";filesystem_used_bytes="
-        << filesystem.used_bytes
-        << ";uptime_seconds="
-        << uptime.uptime_seconds;
-
-    return payload.str();
-}
-
-std::string buildNetworkPayload(
-    const std::vector<
-        sysprobe_network_interface
-    > &interfaces
-)
-{
-    std::ostringstream payload;
-
-    payload
-        << "interface_count="
-        << interfaces.size();
-
-    if (!interfaces.empty()) {
-        payload
-            << ";first="
-            << interfaces.front().name
-            << ";rx_bytes="
-            << interfaces.front().
-                rx_bytes
-            << ";tx_bytes="
-            << interfaces.front().
-                tx_bytes;
-    }
-
-    return payload.str();
-}
-
-std::string buildProcessPayload(
-    const std::vector<
-        sysprobe_process_info
-    > &processes
-)
-{
-    std::ostringstream payload;
-
-    payload
-        << "process_count="
-        << processes.size();
-
-    return payload.str();
 }
 
 StopRequest waitForStop(
@@ -610,7 +668,7 @@ int runAgent(
 )
 {
     constexpr std::size_t
-        workerCount = 3;
+        workerCount = 4;
 
     constexpr std::size_t
         queueCapacity = 8;
@@ -618,10 +676,62 @@ int runAgent(
     constexpr std::size_t
         maxSpoolRecords = 100000;
 
+    constexpr std::size_t
+        maxTelemetryBatchRecords = 16;
+
+    constexpr auto
+        transportInterval =
+            std::chrono::seconds(5);
+
+    constexpr auto
+        transportDeadline =
+            std::chrono::milliseconds(
+                1500
+            );
+
     SQLiteSpool spool(
         spoolPath,
         maxSpoolRecords
     );
+
+    const std::string hostname =
+        resolveHostname();
+
+    const std::string agentId =
+        resolveAgentId(
+            hostname
+        );
+
+    const std::string opsSightEndpoint =
+        resolveOpsSightEndpoint();
+
+    GrpcTelemetryClientOptions
+        telemetryOptions;
+
+    telemetryOptions.endpoint =
+        opsSightEndpoint;
+
+    telemetryOptions.agentId =
+        agentId;
+
+    telemetryOptions.hostname =
+        hostname;
+
+    telemetryOptions.agentVersion =
+        SENTINEL_AGENT_VERSION;
+
+    telemetryOptions.maxBatchRecords =
+        maxTelemetryBatchRecords;
+
+    telemetryOptions.rpcDeadline =
+        transportDeadline;
+
+    GrpcTelemetryClient
+        telemetryClient(
+            std::move(
+                telemetryOptions
+            )
+        );
 
     BoundedThreadPool threadPool(
         workerCount,
@@ -652,6 +762,90 @@ int runAgent(
 
     std::atomic<std::size_t>
         processRuns{0};
+
+    std::atomic<std::size_t>
+        transportRuns{0};
+
+    std::atomic<std::size_t>
+        transportErrors{0};
+
+    std::atomic<std::size_t>
+        transportAcknowledgedRecords{0};
+
+    auto flushTelemetry =
+        [&]() {
+            const auto result =
+                telemetryClient.flush(
+                    spool
+                );
+
+            ++transportRuns;
+
+            if (
+                result.status ==
+                TelemetryFlushStatus::ok
+            ) {
+                transportAcknowledgedRecords.
+                    fetch_add(
+                        result.
+                            acknowledgedRecords
+                    );
+
+                if (
+                    result.
+                        acknowledgedRecords >
+                    0
+                ) {
+                    std::lock_guard lock(
+                        outputMutex
+                    );
+
+                    std::cout
+                        << "transport status=ok"
+                        << " sent_records="
+                        << result.sentRecords
+                        << " acknowledged_records="
+                        << result.
+                            acknowledgedRecords
+                        << '\n';
+                }
+
+                return;
+            }
+
+            if (
+                result.status ==
+                TelemetryFlushStatus::
+                    nothing_to_send
+            ) {
+                return;
+            }
+
+            ++transportErrors;
+
+            std::lock_guard lock(
+                outputMutex
+            );
+
+            std::cerr
+                << "transport status="
+                << telemetryFlushStatusName(
+                    result.status
+                )
+                << " sent_records="
+                << result.sentRecords
+                << " acknowledged_records="
+                << result.
+                    acknowledgedRecords;
+
+            if (!result.message.empty()) {
+                std::cerr
+                    << " message="
+                    << result.message;
+            }
+
+            std::cerr << '\n';
+        };
 
     sysprobe_cpu_times
         previousCpu{};
@@ -731,15 +925,26 @@ int runAgent(
                         currentCpu;
                 }
 
-                persistTelemetry(
-                    spool,
-                    "system",
-                    buildSystemPayload(
+                std::string payload;
+
+                if (
+                    !encodeSystemMetrics(
                         cpuUsagePercent,
                         memory,
                         filesystem,
-                        uptime
-                    ),
+                        uptime,
+                        payload
+                    )
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
+                persistTelemetry(
+                    spool,
+                    "system",
+                    payload,
                     spoolFullCount,
                     spoolErrorCount
                 );
@@ -787,12 +992,23 @@ int runAgent(
                     return;
                 }
 
+                std::string payload;
+
+                if (
+                    !encodeNetworkSnapshot(
+                        interfaces,
+                        payload
+                    )
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
                 persistTelemetry(
                     spool,
                     "network",
-                    buildNetworkPayload(
-                        interfaces
-                    ),
+                    payload,
                     spoolFullCount,
                     spoolErrorCount
                 );
@@ -832,12 +1048,23 @@ int runAgent(
                     return;
                 }
 
+                std::string payload;
+
+                if (
+                    !encodeProcessSnapshot(
+                        processes,
+                        payload
+                    )
+                ) {
+                    ++collectionErrors;
+
+                    return;
+                }
+
                 persistTelemetry(
                     spool,
                     "processes",
-                    buildProcessPayload(
-                        processes
-                    ),
+                    payload,
                     spoolFullCount,
                     spoolErrorCount
                 );
@@ -858,6 +1085,14 @@ int runAgent(
             true
         );
 
+    const auto transportResult =
+        scheduler.schedulePeriodic(
+            "telemetry_transport",
+            transportInterval,
+            flushTelemetry,
+            true
+        );
+
     if (
         systemResult !=
             Scheduler::ScheduleResult::
@@ -866,6 +1101,9 @@ int runAgent(
             Scheduler::ScheduleResult::
                 scheduled ||
         processResult !=
+            Scheduler::ScheduleResult::
+                scheduled ||
+        transportResult !=
             Scheduler::ScheduleResult::
                 scheduled
     ) {
@@ -891,6 +1129,12 @@ int runAgent(
             << "lifecycle state=running"
             << " spool_path="
             << spoolPath
+            << " opssight_endpoint="
+            << opsSightEndpoint
+            << " agent_id="
+            << agentId
+            << " hostname="
+            << hostname
             << '\n';
     }
 
@@ -929,6 +1173,8 @@ int runAgent(
 
     threadPool.stop();
 
+    flushTelemetry();
+
     std::size_t spoolRecords = 0;
 
     if (
@@ -955,6 +1201,12 @@ int runAgent(
         << networkRuns.load()
         << " process_runs="
         << processRuns.load()
+        << " transport_runs="
+        << transportRuns.load()
+        << " transport_errors="
+        << transportErrors.load()
+        << " transport_acknowledged_records="
+        << transportAcknowledgedRecords.load()
         << " dropped_submissions="
         << scheduler.droppedSubmissionCount()
         << " collection_errors="

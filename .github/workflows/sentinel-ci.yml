@@ -351,6 +351,13 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DSENTINEL_BUILD_TESTS=OFF
 
+      - name: Generate analysis Protobuf sources
+        run: |
+          cmake \
+            --build sentinel-agent/build-analysis \
+            --target nexusops_telemetry_contract \
+            --parallel
+
       - name: Run clang-tidy
         run: |
           mapfile -d '' source_files < <(

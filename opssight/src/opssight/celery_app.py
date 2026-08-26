@@ -9,6 +9,7 @@ celery_app = Celery(
         "opssight.tasks.system",
         "opssight.tasks.checks",
         "opssight.tasks.scheduler",
+        "opssight.tasks.outbox",
     ],
 )
 
@@ -22,6 +23,10 @@ celery_app.conf.update(
     beat_schedule={
         "dispatch-due-checks": {
             "task": "opssight.scheduler.dispatch_due_checks",
+            "schedule": 5.0,
+        },
+        "publish-outbox-events": {
+            "task": "opssight.outbox.publish",
             "schedule": 5.0,
         },
     },

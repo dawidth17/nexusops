@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from enum import StrEnum
 from uuid import UUID
@@ -6,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opssight.checks.result import CheckResult
+from opssight.correlation import resolve_check_correlation_id
 from opssight.metrics import record_alert_transition
 from opssight.models.alert import Alert
 from opssight.models.alert_rule import AlertRule
@@ -15,6 +17,8 @@ from opssight.outbox import (
     AlertEventType,
     enqueue_alert_event,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AlertAction(StrEnum):
@@ -110,16 +114,23 @@ def process_check_result(
         )
 
         if action == AlertAction.OPEN:
+            correlation_id = resolve_check_correlation_id(
+                check.id,
+                result.started_at,
+                result.correlation_id,
+            )
+
             alert = Alert(
                 alert_rule_id=rule.id,
                 status=AlertStatus.OPEN.value,
+                correlation_id=correlation_id,
                 message=result.message,
                 opened_at=result_time,
             )
 
             session.add(alert)
 
-            enqueue_alert_event(
+            outbox_event = enqueue_alert_event(
                 session=session,
                 alert=alert,
                 rule=rule,
@@ -133,6 +144,16 @@ def process_check_result(
                 severity=rule.severity,
             )
 
+            logger.info(
+                "alert_opened",
+                extra={
+                    "alert_id": str(alert.id),
+                    "event_id": str(outbox_event.id),
+                    "check_id": str(check.id),
+                    "correlation_id": correlation_id,
+                },
+            )
+
         elif (
             action == AlertAction.RECOVER
             and open_alert is not None
@@ -140,7 +161,7 @@ def process_check_result(
             open_alert.status = AlertStatus.RECOVERED.value
             open_alert.recovered_at = result_time
 
-            enqueue_alert_event(
+            outbox_event = enqueue_alert_event(
                 session=session,
                 alert=open_alert,
                 rule=rule,
@@ -152,6 +173,16 @@ def process_check_result(
             record_alert_transition(
                 action=AlertAction.RECOVER.value,
                 severity=rule.severity,
+            )
+
+            logger.info(
+                "alert_recovered",
+                extra={
+                    "alert_id": str(open_alert.id),
+                    "event_id": str(outbox_event.id),
+                    "check_id": str(check.id),
+                    "correlation_id": open_alert.correlation_id,
+                },
             )
 
     session.flush()

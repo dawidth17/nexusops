@@ -18,6 +18,10 @@ int main()
         "contract-test-batch"
     );
 
+    envelope.set_correlation_id(
+        "contract-test-correlation"
+    );
+
     auto *batch =
         envelope.mutable_metrics();
 
@@ -50,6 +54,13 @@ int main()
     if (
         envelope.agent_id() !=
         "contract-test-agent"
+    ) {
+        return 1;
+    }
+
+    if (
+        envelope.correlation_id() !=
+        "contract-test-correlation"
     ) {
         return 1;
     }

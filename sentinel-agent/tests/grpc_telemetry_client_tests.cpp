@@ -208,6 +208,11 @@ public:
                         envelope.batch_id()
                     );
 
+                metricCorrelationIds_.
+                    push_back(
+                        envelope.correlation_id()
+                    );
+
                 metricSequences_.
                     push_back(
                         sequences
@@ -277,6 +282,17 @@ public:
     }
 
     [[nodiscard]]
+    std::vector<std::string>
+    metricCorrelationIds() const
+    {
+        std::lock_guard lock(
+            mutex_
+        );
+
+        return metricCorrelationIds_;
+    }
+
+    [[nodiscard]]
     std::vector<
         std::vector<std::int64_t>
     >
@@ -302,6 +318,9 @@ private:
 
     std::vector<std::string>
         metricBatchIds_;
+
+    std::vector<std::string>
+        metricCorrelationIds_;
 
     std::vector<
         std::vector<std::int64_t>
@@ -441,6 +460,33 @@ makeOptions(
     return options;
 }
 
+bool isLowercaseHex(
+    const std::string &value
+)
+{
+    for (
+        const char character :
+        value
+    ) {
+        const bool digit =
+            character >= '0' &&
+            character <= '9';
+
+        const bool hexLetter =
+            character >= 'a' &&
+            character <= 'f';
+
+        if (
+            !digit &&
+            !hexLetter
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 TEST(
     GrpcTelemetryClientTests,
     acknowledgesSentRecords
@@ -529,6 +575,25 @@ TEST(
     EXPECT_EQ(
         sequences[0][0],
         sequence
+    );
+
+    const auto correlationIds =
+        service.metricCorrelationIds();
+
+    ASSERT_EQ(
+        correlationIds.size(),
+        1U
+    );
+
+    EXPECT_EQ(
+        correlationIds[0].size(),
+        64U
+    );
+
+    EXPECT_TRUE(
+        isLowercaseHex(
+            correlationIds[0]
+        )
     );
 }
 
@@ -718,6 +783,34 @@ TEST(
     EXPECT_EQ(
         batchIds[0],
         batchIds[1]
+    );
+
+    const auto correlationIds =
+        service.metricCorrelationIds();
+
+    ASSERT_EQ(
+        correlationIds.size(),
+        2U
+    );
+
+    EXPECT_FALSE(
+        correlationIds[0].empty()
+    );
+
+    EXPECT_EQ(
+        correlationIds[0].size(),
+        64U
+    );
+
+    EXPECT_TRUE(
+        isLowercaseHex(
+            correlationIds[0]
+        )
+    );
+
+    EXPECT_EQ(
+        correlationIds[0],
+        correlationIds[1]
     );
 
     const auto sequences =

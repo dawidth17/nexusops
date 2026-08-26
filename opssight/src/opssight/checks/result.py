@@ -8,3 +8,4 @@ class CheckResult:
     started_at: datetime
     duration_ms: float
     message: str
+    correlation_id: str | None = None

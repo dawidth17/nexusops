@@ -6,7 +6,9 @@
 
 #include <google/protobuf/util/time_util.h>
 #include <grpcpp/grpcpp.h>
+#include <openssl/sha.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
@@ -72,6 +74,73 @@ std::string makeTelemetryBatchId(
         first.capturedAtUtc +
         "-" +
         last.capturedAtUtc;
+}
+
+std::string makeCorrelationId(
+    const std::string &agentId,
+    const std::string &batchId
+)
+{
+    const std::string material =
+        "sentinel-agent|" +
+        agentId +
+        "|" +
+        batchId;
+
+    std::array<
+        unsigned char,
+        SHA256_DIGEST_LENGTH
+    > digest{};
+
+    const auto *result =
+        SHA256(
+            reinterpret_cast<
+                const unsigned char *
+            >(
+                material.data()
+            ),
+            material.size(),
+            digest.data()
+        );
+
+    if (result == nullptr) {
+        throw std::runtime_error(
+            "failed to create telemetry correlation id"
+        );
+    }
+
+    constexpr char hexDigits[] =
+        "0123456789abcdef";
+
+    std::string correlationId;
+
+    correlationId.reserve(
+        digest.size() * 2
+    );
+
+    for (
+        const auto value :
+        digest
+    ) {
+        correlationId.push_back(
+            hexDigits[
+                (
+                    value >>
+                    4U
+                ) &
+                0x0FU
+            ]
+        );
+
+        correlationId.push_back(
+            hexDigits[
+                value &
+                0x0FU
+            ]
+        );
+    }
+
+    return correlationId;
 }
 
 std::string grpcStatusMessage(
@@ -392,6 +461,13 @@ struct GrpcTelemetryClient::Impl {
             heartbeatBatchId
         );
 
+        envelope.set_correlation_id(
+            makeCorrelationId(
+                options.agentId,
+                heartbeatBatchId
+            )
+        );
+
         envelope.mutable_sent_at()->
             CopyFrom(
                 google::protobuf::util::
@@ -430,13 +506,23 @@ struct GrpcTelemetryClient::Impl {
             return false;
         }
 
+        const std::string batchId =
+            makeTelemetryBatchId(
+                records
+            );
+
         envelope.set_agent_id(
             options.agentId
         );
 
         envelope.set_batch_id(
-            makeTelemetryBatchId(
-                records
+            batchId
+        );
+
+        envelope.set_correlation_id(
+            makeCorrelationId(
+                options.agentId,
+                batchId
             )
         );
 

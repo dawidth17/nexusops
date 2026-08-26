@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from opssight.config import settings
+from opssight.correlation import validate_correlation_id
 from opssight.metrics import record_outbox_publication
 from opssight.models.alert import Alert
 from opssight.models.alert_rule import AlertRule
@@ -174,6 +175,10 @@ def enqueue_alert_event(
             "check id is required for event creation"
         )
 
+    correlation_id = validate_correlation_id(
+        alert.correlation_id
+    )
+
     if event_type == AlertEventType.OPENED:
         if alert.status != AlertStatus.OPEN.value:
             raise ValueError(
@@ -195,6 +200,7 @@ def enqueue_alert_event(
             )
 
         occurred_at = alert.recovered_at
+
         recovered_at = format_utc_timestamp(
             alert.recovered_at
         )
@@ -205,10 +211,6 @@ def enqueue_alert_event(
         )
 
     event_id = uuid4()
-
-    correlation_id = str(
-        alert.id
-    )
 
     event_data: dict[str, Any] = {
         "eventId": str(event_id),
@@ -369,16 +371,15 @@ def publish_pending_outbox_events(
             )
 
             logger.warning(
-                "outbox_publish_failed "
-                "event_id=%s "
-                "event_type=%s "
-                "attempt=%s "
-                "error=%s",
-                event.id,
-                event.event_type,
-                event.attempt_count,
-                error_message,
+                "outbox_publish_failed",
                 exc_info=True,
+                extra={
+                    "event_id": str(event.id),
+                    "event_type": event.event_type,
+                    "correlation_id": event.correlation_id,
+                    "attempt": event.attempt_count,
+                    "error": error_message,
+                },
             )
 
         else:
@@ -390,6 +391,16 @@ def publish_pending_outbox_events(
             record_outbox_publication(
                 event_type=event.event_type,
                 success=True,
+            )
+
+            logger.info(
+                "outbox_published",
+                extra={
+                    "event_id": str(event.id),
+                    "event_type": event.event_type,
+                    "correlation_id": event.correlation_id,
+                    "attempt": event.attempt_count,
+                },
             )
 
     session.flush()

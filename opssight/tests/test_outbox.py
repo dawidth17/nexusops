@@ -29,6 +29,13 @@ database_test = pytest.mark.skipif(
     reason="database tests require a dedicated test database",
 )
 
+CORRELATION_ID = (
+    "cd87135d369ad638"
+    "4961ee44b67c7d2d"
+    "069b1880de6e6d5f"
+    "7bbadcb027375cf1"
+)
+
 
 @pytest.fixture
 def session() -> Generator[Session, None, None]:
@@ -36,6 +43,7 @@ def session() -> Generator[Session, None, None]:
         database_session.execute(
             delete(OutboxEvent)
         )
+
         database_session.flush()
 
         yield database_session
@@ -46,12 +54,14 @@ def session() -> Generator[Session, None, None]:
 def make_result(
     success: bool,
     message: str,
+    correlation_id: str | None = None,
 ) -> CheckResult:
     return CheckResult(
         success=success,
         started_at=datetime.now(UTC),
         duration_ms=10.0,
         message=message,
+        correlation_id=correlation_id,
     )
 
 
@@ -91,6 +101,7 @@ class RecordingPublisher:
         failures_remaining: int = 0,
     ) -> None:
         self.failures_remaining = failures_remaining
+
         self.messages: list[
             tuple[
                 str,
@@ -175,7 +186,7 @@ def create_pending_event(
         "schemaVersion": 1,
         "occurredAt": "2026-08-26T10:00:00Z",
         "source": "opssight",
-        "correlationId": str(alert_id),
+        "correlationId": CORRELATION_ID,
         "payload": {
             "alertId": str(alert_id),
             "alertRuleId": str(uuid4()),
@@ -196,7 +207,7 @@ def create_pending_event(
         schema_version=1,
         occurred_at=now,
         source="opssight",
-        correlation_id=str(alert_id),
+        correlation_id=CORRELATION_ID,
         topic=settings.kafka_alert_topic,
         message_key=str(alert_id),
         event_data=event_data,
@@ -223,12 +234,18 @@ def test_opening_alert_creates_outbox_event(
         make_result(
             False,
             "HTTP check failed",
+            CORRELATION_ID,
         ),
     )
 
     assert len(changed_alerts) == 1
 
     alert = changed_alerts[0]
+
+    assert (
+        alert.correlation_id
+        == CORRELATION_ID
+    )
 
     outbox_event = session.scalar(
         select(OutboxEvent).where(
@@ -258,7 +275,7 @@ def test_opening_alert_creates_outbox_event(
 
     assert (
         outbox_event.correlation_id
-        == str(alert.id)
+        == CORRELATION_ID
     )
 
     assert outbox_event.published_at is None
@@ -278,8 +295,9 @@ def test_opening_alert_creates_outbox_event(
     assert event["schemaVersion"] == 1
     assert event["source"] == "opssight"
 
-    assert event["correlationId"] == str(
-        alert.id
+    assert (
+        event["correlationId"]
+        == CORRELATION_ID
     )
 
     assert event["occurredAt"].endswith(
@@ -320,7 +338,7 @@ def test_opening_alert_creates_outbox_event(
 
 
 @database_test
-def test_recovering_alert_creates_recovered_event(
+def test_recovering_alert_preserves_correlation_id(
     session: Session,
 ) -> None:
     check, _rule = create_alert_rule(
@@ -333,6 +351,7 @@ def test_recovering_alert_creates_recovered_event(
         make_result(
             False,
             "HTTP check failed",
+            CORRELATION_ID,
         ),
     )
 
@@ -344,12 +363,18 @@ def test_recovering_alert_creates_recovered_event(
         make_result(
             True,
             "HTTP check recovered",
+            "different-recovery-correlation",
         ),
     )
 
     assert recovered == [
         alert
     ]
+
+    assert (
+        alert.correlation_id
+        == CORRELATION_ID
+    )
 
     events = list(
         session.scalars(
@@ -382,7 +407,17 @@ def test_recovering_alert_creates_recovered_event(
     assert (
         opened_event.correlation_id
         == recovered_event.correlation_id
-        == str(alert.id)
+        == CORRELATION_ID
+    )
+
+    assert (
+        opened_event.event_data["correlationId"]
+        == CORRELATION_ID
+    )
+
+    assert (
+        recovered_event.event_data["correlationId"]
+        == CORRELATION_ID
     )
 
     assert (
@@ -417,6 +452,7 @@ def test_transaction_rollback_removes_outbox_event(
         make_result(
             False,
             "transaction rollback test",
+            CORRELATION_ID,
         ),
     )
 

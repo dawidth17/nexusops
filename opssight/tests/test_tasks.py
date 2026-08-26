@@ -26,6 +26,12 @@ database_test = pytest.mark.skipif(
     reason="database tests require a dedicated test database",
 )
 
+CORRELATION_ID = (
+    "cd87135d369ad638"
+    "4961ee44b67c7d2d"
+    "069b1880de6e6d5f"
+    "7bbadcb027375cf1"
+)
 
 
 @pytest.fixture
@@ -295,7 +301,8 @@ def test_check_task_processes_result(
     )
 
     execute_check_task.run(
-        str(check.id)
+        str(check.id),
+        CORRELATION_ID,
     )
 
     session.expire_all()
@@ -317,6 +324,11 @@ def test_check_task_processes_result(
     assert alert is not None
     assert alert.status == AlertStatus.OPEN.value
     assert alert.message == "dns resolution failed"
+
+    assert (
+        alert.correlation_id
+        == CORRELATION_ID
+    )
 
     assert mocked_executor.await_count == 1
 

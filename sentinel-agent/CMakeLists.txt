@@ -337,6 +337,7 @@ target_link_libraries(
         sentinel_storage
         nexusops_telemetry_contract
         PkgConfig::GRPCPP
+        OpenSSL::Crypto
 )
 
 sentinel_apply_target_options(

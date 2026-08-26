@@ -18,6 +18,16 @@ class Settings(BaseSettings):
     rabbitmq_user: str = "opssight"
     rabbitmq_password: SecretStr = SecretStr("change_me")
 
+    kafka_bootstrap_servers: str = "127.0.0.1:9092"
+    kafka_alert_topic: str = (
+        "nexusops.opssight.alert-lifecycle.v1"
+    )
+    kafka_delivery_timeout_seconds: float = 10.0
+
+    outbox_batch_size: int = 100
+    outbox_retry_base_seconds: int = 5
+    outbox_retry_max_seconds: int = 300
+
     grpc_host: str = "127.0.0.1"
     grpc_port: int = 50051
     grpc_max_workers: int = 10

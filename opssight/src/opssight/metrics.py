@@ -13,7 +13,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from opssight.database import SessionFactory
-from opssight.models import Alert, SecurityFinding
+from opssight.models import (
+    Alert,
+    OutboxEvent,
+    SecurityFinding,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +89,15 @@ SCHEDULER_DISPATCHED_CHECKS_TOTAL = Counter(
     "Total number of checks dispatched by the scheduler",
 )
 
+OUTBOX_PUBLICATIONS_TOTAL = Counter(
+    "opssight_outbox_publications_total",
+    "Total number of outbox publication attempts",
+    [
+        "event_type",
+        "outcome",
+    ],
+)
+
 
 class OpsSightStateCollector:
     def describe(self):
@@ -96,6 +109,11 @@ class OpsSightStateCollector:
         yield GaugeMetricFamily(
             "opssight_open_security_findings",
             "Current number of open security findings",
+        )
+
+        yield GaugeMetricFamily(
+            "opssight_outbox_pending_events",
+            "Current number of unpublished outbox events",
         )
 
         yield GaugeMetricFamily(
@@ -132,6 +150,18 @@ class OpsSightStateCollector:
                     )
                     .where(
                         SecurityFinding.status == "open"
+                    )
+                )
+
+                pending_outbox_events = session.scalar(
+                    select(
+                        func.count()
+                    )
+                    .select_from(
+                        OutboxEvent
+                    )
+                    .where(
+                        OutboxEvent.published_at.is_(None)
                     )
                 )
 
@@ -174,6 +204,18 @@ class OpsSightStateCollector:
             ),
         )
 
+        pending_outbox_metric = GaugeMetricFamily(
+            "opssight_outbox_pending_events",
+            "Current number of unpublished outbox events",
+        )
+
+        pending_outbox_metric.add_metric(
+            [],
+            float(
+                pending_outbox_events or 0
+            ),
+        )
+
         collection_success.add_metric(
             [],
             1,
@@ -181,6 +223,7 @@ class OpsSightStateCollector:
 
         yield open_alerts_metric
         yield open_findings_metric
+        yield pending_outbox_metric
         yield collection_success
 
 
@@ -244,6 +287,22 @@ def record_security_finding_change(
 
 def record_scheduler_dispatch() -> None:
     SCHEDULER_DISPATCHED_CHECKS_TOTAL.inc()
+
+
+def record_outbox_publication(
+    event_type: str,
+    success: bool,
+) -> None:
+    outcome = (
+        "success"
+        if success
+        else "failure"
+    )
+
+    OUTBOX_PUBLICATIONS_TOTAL.labels(
+        event_type=event_type,
+        outcome=outcome,
+    ).inc()
 
 
 def get_route_template(

@@ -11,6 +11,10 @@ from opssight.models.alert import Alert
 from opssight.models.alert_rule import AlertRule
 from opssight.models.check import Check
 from opssight.models.enums import AlertStatus
+from opssight.outbox import (
+    AlertEventType,
+    enqueue_alert_event,
+)
 
 
 class AlertAction(StrEnum):
@@ -114,6 +118,14 @@ def process_check_result(
             )
 
             session.add(alert)
+
+            enqueue_alert_event(
+                session=session,
+                alert=alert,
+                rule=rule,
+                event_type=AlertEventType.OPENED,
+            )
+
             changed_alerts.append(alert)
 
             record_alert_transition(
@@ -127,6 +139,13 @@ def process_check_result(
         ):
             open_alert.status = AlertStatus.RECOVERED.value
             open_alert.recovered_at = result_time
+
+            enqueue_alert_event(
+                session=session,
+                alert=open_alert,
+                rule=rule,
+                event_type=AlertEventType.RECOVERED,
+            )
 
             changed_alerts.append(open_alert)
 

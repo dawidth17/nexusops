@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.19.1",
     "celery>=5.6.3,<6",
+    "confluent-kafka>=2.15.0,<3",
     "fastapi>=0.141.1",
     "grpcio>=1.83.0",
     "httpx>=0.28.1",
@@ -76,6 +77,8 @@ exclude = [
 module = [
     "celery",
     "celery.*",
+    "confluent_kafka",
+    "confluent_kafka.*",
 ]
 ignore_missing_imports = true
 

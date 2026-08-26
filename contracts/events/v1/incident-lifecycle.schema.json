@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexusops.dev/contracts/events/v1/incident-lifecycle.schema.json",
+  "title": "NexusOps Incident Lifecycle Event v1",
+  "description": "Incident lifecycle events published by ServiceCore.",
+  "allOf": [
+    {
+      "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json"
+    },
+    {
+      "properties": {
+        "eventType": {
+          "enum": [
+            "nexusops.incident.created",
+            "nexusops.incident.updated",
+            "nexusops.incident.resolved",
+            "nexusops.incident.closed"
+          ]
+        },
+        "source": {
+          "const": "servicecore"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "incidentId",
+            "sourceAlertId",
+            "title",
+            "description",
+            "impact",
+            "urgency",
+            "priority",
+            "status",
+            "assigneeId",
+            "teamId",
+            "createdAt",
+            "updatedAt"
+          ],
+          "properties": {
+            "incidentId": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/uuid"
+            },
+            "sourceAlertId": {
+              "oneOf": [
+                {
+                  "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "impact": {
+              "enum": [
+                "LOW",
+                "MEDIUM",
+                "HIGH"
+              ]
+            },
+            "urgency": {
+              "enum": [
+                "LOW",
+                "MEDIUM",
+                "HIGH"
+              ]
+            },
+            "priority": {
+              "enum": [
+                "P1",
+                "P2",
+                "P3",
+                "P4"
+              ]
+            },
+            "status": {
+              "enum": [
+                "OPEN",
+                "IN_PROGRESS",
+                "RESOLVED",
+                "CLOSED"
+              ]
+            },
+            "assigneeId": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "teamId": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/utcTimestamp"
+            },
+            "updatedAt": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/utcTimestamp"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "eventType": {
+          "const": "nexusops.incident.created"
+        },
+        "payload": {
+          "properties": {
+            "status": {
+              "const": "OPEN"
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "nexusops.incident.updated"
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "nexusops.incident.resolved"
+        },
+        "payload": {
+          "properties": {
+            "status": {
+              "const": "RESOLVED"
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "nexusops.incident.closed"
+        },
+        "payload": {
+          "properties": {
+            "status": {
+              "const": "CLOSED"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

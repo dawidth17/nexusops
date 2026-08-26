@@ -1,0 +1,18 @@
+{
+  "eventId": "11111111-1111-4111-8111-111111111111",
+  "eventType": "nexusops.alert.opened",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-26T10:00:00Z",
+  "source": "opssight",
+  "correlationId": "22222222-2222-4222-8222-222222222222",
+  "payload": {
+    "alertId": "33333333-3333-4333-8333-333333333333",
+    "alertRuleId": "44444444-4444-4444-8444-444444444444",
+    "checkId": "55555555-5555-4555-8555-555555555555",
+    "status": "open",
+    "severity": "critical",
+    "message": "HTTP check failed with status 503",
+    "openedAt": "2026-08-26T10:00:00Z",
+    "recoveredAt": null
+  }
+}

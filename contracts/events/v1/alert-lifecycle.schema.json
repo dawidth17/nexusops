@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexusops.dev/contracts/events/v1/alert-lifecycle.schema.json",
+  "title": "NexusOps Alert Lifecycle Event v1",
+  "description": "Alert lifecycle events published by OpsSight.",
+  "allOf": [
+    {
+      "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json"
+    },
+    {
+      "properties": {
+        "eventType": {
+          "enum": [
+            "nexusops.alert.opened",
+            "nexusops.alert.recovered"
+          ]
+        },
+        "source": {
+          "const": "opssight"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "alertId",
+            "alertRuleId",
+            "checkId",
+            "status",
+            "severity",
+            "message",
+            "openedAt",
+            "recoveredAt"
+          ],
+          "properties": {
+            "alertId": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/uuid"
+            },
+            "alertRuleId": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/uuid"
+            },
+            "checkId": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/uuid"
+            },
+            "status": {
+              "enum": [
+                "open",
+                "recovered"
+              ]
+            },
+            "severity": {
+              "enum": [
+                "info",
+                "warning",
+                "critical"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "openedAt": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/utcTimestamp"
+            },
+            "recoveredAt": {
+              "oneOf": [
+                {
+                  "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/utcTimestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "eventType": {
+          "const": "nexusops.alert.opened"
+        },
+        "payload": {
+          "properties": {
+            "status": {
+              "const": "open"
+            },
+            "recoveredAt": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "nexusops.alert.recovered"
+        },
+        "payload": {
+          "properties": {
+            "status": {
+              "const": "recovered"
+            },
+            "recoveredAt": {
+              "$ref": "https://nexusops.dev/contracts/events/v1/event-envelope.schema.json#/$defs/utcTimestamp"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

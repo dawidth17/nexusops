@@ -172,7 +172,13 @@ This prevents generated code from becoming out of sync with the contract source.
 
 ## Events
 
-Events use a common envelope containing:
+Kafka domain event contracts are stored in:
+
+```text
+events/
+```
+
+All domain events use a common envelope containing:
 
 - `eventId`
 - `eventType`
@@ -182,7 +188,42 @@ Events use a common envelope containing:
 - `correlationId`
 - `payload`
 
-Event schemas are stored in `events/`.
+Version 1 schemas are stored under:
+
+```text
+events/v1/
+```
+
+Current schemas are:
+
+```text
+events/v1/event-envelope.schema.json
+events/v1/alert-lifecycle.schema.json
+events/v1/incident-lifecycle.schema.json
+```
+
+Production Kafka topics use:
+
+```text
+nexusops.<producer>.<stream>.v<major>
+```
+
+Current topics are:
+
+```text
+nexusops.opssight.alert-lifecycle.v1
+nexusops.servicecore.incident-lifecycle.v1
+```
+
+Topic naming, schema compatibility, partition keys, delivery semantics, and event examples are documented in:
+
+```text
+events/README.md
+```
+
+Kafka is used for durable domain events exchanged between NexusOps applications.
+
+RabbitMQ remains dedicated to Celery task execution inside OpsSight.
 
 ## General rules
 

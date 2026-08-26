@@ -9,6 +9,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -92,6 +94,93 @@ std::string grpcStatusMessage(
                 status.error_code()
             )
         );
+}
+
+std::string readRequiredFile(
+    const std::string &path,
+    const std::string &description
+)
+{
+    if (path.empty()) {
+        throw std::invalid_argument(
+            description +
+            " path must not be empty"
+        );
+    }
+
+    std::ifstream input(
+        path,
+        std::ios::binary
+    );
+
+    if (!input) {
+        throw std::runtime_error(
+            "unable to read " +
+            description +
+            ": " +
+            path
+        );
+    }
+
+    const std::string content{
+        std::istreambuf_iterator<char>{
+            input
+        },
+        std::istreambuf_iterator<char>{}
+    };
+
+    if (content.empty()) {
+        throw std::runtime_error(
+            description +
+            " is empty: " +
+            path
+        );
+    }
+
+    return content;
+}
+
+std::shared_ptr<
+    grpc::ChannelCredentials
+>
+buildChannelCredentials(
+    const nexusops::agent::
+        GrpcTelemetryClientOptions
+        &options
+)
+{
+    if (!options.mtls.enabled) {
+        return grpc::
+            InsecureChannelCredentials();
+    }
+
+    grpc::SslCredentialsOptions
+        sslOptions;
+
+    sslOptions.pem_root_certs =
+        readRequiredFile(
+            options.mtls.
+                caCertificatePath,
+            "OpsSight mTLS CA certificate"
+        );
+
+    sslOptions.pem_cert_chain =
+        readRequiredFile(
+            options.mtls.
+                clientCertificatePath,
+            "SentinelAgent mTLS client certificate"
+        );
+
+    sslOptions.pem_private_key =
+        readRequiredFile(
+            options.mtls.
+                clientPrivateKeyPath,
+            "SentinelAgent mTLS client private key"
+        );
+
+    return grpc::SslCredentials(
+        sslOptions
+    );
 }
 
 bool decodeTelemetryPayload(
@@ -276,8 +365,9 @@ struct GrpcTelemetryClient::Impl {
         channel =
             grpc::CreateChannel(
                 options.endpoint,
-                grpc::
-                    InsecureChannelCredentials()
+                buildChannelCredentials(
+                    options
+                )
             );
 
         stub =

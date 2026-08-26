@@ -8,6 +8,8 @@
 *.p12
 *.pfx
 
+infra/certs/generated/
+
 # editors
 .vscode/*
 !.vscode/extensions.json
@@ -50,6 +52,7 @@ coverage/
 
 # c and c++
 sentinel-agent/build/
+sentinel-agent/build-*/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

@@ -32,6 +32,16 @@ struct TelemetryFlushResult {
     std::string message;
 };
 
+struct GrpcTelemetryClientMtlsOptions {
+    bool enabled{false};
+
+    std::string caCertificatePath;
+
+    std::string clientCertificatePath;
+
+    std::string clientPrivateKeyPath;
+};
+
 struct GrpcTelemetryClientOptions {
     std::string endpoint{
         "127.0.0.1:50051"
@@ -49,6 +59,9 @@ struct GrpcTelemetryClientOptions {
         rpcDeadline{
             1500
         };
+
+    GrpcTelemetryClientMtlsOptions
+        mtls;
 };
 
 class GrpcTelemetryClient {

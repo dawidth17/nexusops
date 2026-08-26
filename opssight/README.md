@@ -1,6 +1,6 @@
 # OpsSight
 
-OpsSight is the monitoring, diagnostics, alerting, and security service of NexusOps.
+OpsSight is the monitoring, diagnostics, alerting, telemetry, and security service of NexusOps.
 
 It is written in Python using FastAPI and stores operational data in PostgreSQL with TimescaleDB. Background monitoring tasks are executed with Celery and RabbitMQ.
 
@@ -9,6 +9,8 @@ OpsSight currently provides:
 - host and monitoring check management
 - DNS, TCP, HTTP, and TLS checks
 - scheduled background check execution
+- telemetry ingestion through gRPC
+- mutual TLS authentication for SentinelAgent
 - telemetry storage with TimescaleDB
 - deterministic alert evaluation
 - security signal processing and findings
@@ -22,6 +24,8 @@ OpsSight currently provides:
 
 - Python 3.12
 - FastAPI
+- gRPC
+- Protobuf
 - SQLAlchemy
 - PostgreSQL
 - TimescaleDB
@@ -46,6 +50,7 @@ opssight/
 │   ├── api/                 REST API
 │   ├── auth/                authorization
 │   ├── checks/              DNS, TCP, HTTP, and TLS checks
+│   ├── grpc/                telemetry gRPC server and security
 │   ├── models/              SQLAlchemy models
 │   ├── repositories/        database access
 │   ├── schemas/             API schemas
@@ -65,39 +70,58 @@ opssight/
 └── uv.lock
 ```
 
+Generated Protobuf Python bindings are created from the shared NexusOps contracts and are not stored in Git.
+
 ## Architecture
 
 OpsSight uses separate processes for the API, background workers, and scheduling.
 
-```text
-                         ┌──────────────┐
-                         │   Clients    │
-                         └──────┬───────┘
-                                │
-                                ▼
-                         ┌──────────────┐
-                         │ FastAPI API  │
-                         └──────┬───────┘
-                                │
-                       ┌────────┴────────┐
-                       │                 │
-                       ▼                 ▼
-              ┌────────────────┐   ┌──────────────┐
-              │ TimescaleDB /  │   │   RabbitMQ   │
-              │  PostgreSQL    │   └──────┬───────┘
-              └────────────────┘          │
-                                         ▼
-                                  ┌──────────────┐
-                                  │Celery worker │
-                                  └──────┬───────┘
-                                         │
-                                         ▼
-                                 monitoring checks
+The FastAPI process also starts the OpsSight telemetry gRPC server.
 
-                           Celery scheduler
-                                  │
-                                  ▼
-                         dispatch due checks
+```text
+                    SentinelAgent
+                         │
+                         │ telemetry.v1
+                         │ gRPC + mTLS
+                         ▼
+                  ┌───────────────┐
+                  │   OpsSight    │
+                  │ gRPC server   │
+                  └───────┬───────┘
+                          │
+                          ▼
+                  ┌───────────────┐
+                  │ TimescaleDB / │
+                  │  PostgreSQL   │
+                  └───────────────┘
+
+
+                         Clients
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │ FastAPI API  │
+                     └──────┬───────┘
+                            │
+                   ┌────────┴────────┐
+                   │                 │
+                   ▼                 ▼
+          ┌────────────────┐   ┌──────────────┐
+          │ TimescaleDB /  │   │   RabbitMQ   │
+          │  PostgreSQL    │   └──────┬───────┘
+          └────────────────┘          │
+                                     ▼
+                              ┌──────────────┐
+                              │Celery worker │
+                              └──────┬───────┘
+                                     │
+                                     ▼
+                             monitoring checks
+
+                       Celery scheduler
+                              │
+                              ▼
+                     dispatch due checks
 ```
 
 The same OpsSight Docker image is used for:
@@ -199,11 +223,81 @@ Runbooks can be associated with security rules and findings.
 
 ## Telemetry
 
+SentinelAgent sends telemetry to OpsSight using the shared versioned Protobuf contract:
+
+```text
+nexusops.telemetry.v1
+```
+
+The transport uses a streaming gRPC service.
+
+Each SentinelAgent sends a heartbeat containing its agent identity, hostname, and version before telemetry delivery.
+
+Collected metric records are sent in deterministic batches.
+
+OpsSight acknowledges accepted batches with the corresponding batch ID and acknowledged sequence.
+
+Repeated batches are detected so retransmission after a transport failure does not create duplicate telemetry.
+
 Telemetry is stored in PostgreSQL using TimescaleDB.
 
 The telemetry table is converted to a TimescaleDB hypertable, allowing time-based operational data to be queried efficiently.
 
 Telemetry can be queried by time range through the repository layer.
+
+## SentinelAgent mTLS
+
+The SentinelAgent to OpsSight gRPC connection supports mutual TLS.
+
+When gRPC mTLS is enabled:
+
+- OpsSight presents a server certificate
+- SentinelAgent validates the server certificate against the configured CA
+- SentinelAgent presents its own client certificate
+- OpsSight validates the client certificate against the configured CA
+- OpsSight extracts the client certificate common name as the authenticated agent identity
+- the authenticated identity must exist in the configured agent allowlist
+- the telemetry payload `agent_id` must match the authenticated certificate identity
+
+This prevents an agent from impersonating another enrolled agent by only changing the `agent_id` inside a telemetry payload.
+
+OpsSight does not downgrade to an insecure gRPC listener when mTLS is enabled but its security configuration is incomplete.
+
+The main OpsSight settings are:
+
+```text
+OPSSIGHT_GRPC_MTLS_ENABLED
+OPSSIGHT_GRPC_MTLS_CA_CERTIFICATE_PATH
+OPSSIGHT_GRPC_MTLS_SERVER_CERTIFICATE_PATH
+OPSSIGHT_GRPC_MTLS_SERVER_PRIVATE_KEY_PATH
+OPSSIGHT_GRPC_MTLS_ALLOWED_AGENT_IDS
+```
+
+For example:
+
+```bash
+export OPSSIGHT_GRPC_MTLS_ENABLED=true
+
+export OPSSIGHT_GRPC_MTLS_CA_CERTIFICATE_PATH=\
+../infra/certs/generated/ca/ca.cert.pem
+
+export OPSSIGHT_GRPC_MTLS_SERVER_CERTIFICATE_PATH=\
+../infra/certs/generated/server/server.cert.pem
+
+export OPSSIGHT_GRPC_MTLS_SERVER_PRIVATE_KEY_PATH=\
+../infra/certs/generated/server/server.key.pem
+
+export OPSSIGHT_GRPC_MTLS_ALLOWED_AGENT_IDS=\
+sentinel-local
+```
+
+Development certificate generation, agent enrollment, certificate rotation, and the complete local mTLS integration procedure are documented in:
+
+```text
+docs/security/mtls.md
+```
+
+Generated certificates and private keys are not committed to Git.
 
 ## REST API
 
@@ -310,6 +404,14 @@ cd ~/projects/nexusops/opssight
 uv sync --locked --dev
 ```
 
+Generate the Protobuf bindings:
+
+```bash
+uv run python scripts/generate_protobuf.py \
+  --contract-root ../contracts/protobuf \
+  --output-root src
+```
+
 Run the API locally:
 
 ```bash
@@ -326,6 +428,12 @@ The API is available at:
 
 ```text
 http://127.0.0.1:8000
+```
+
+The default gRPC endpoint is:
+
+```text
+127.0.0.1:50051
 ```
 
 Health check:
@@ -450,6 +558,13 @@ uv run pytest -v
 
 The test infrastructure applies migrations and resets database state between tests while preserving the database schema.
 
+The gRPC integration tests also cover:
+
+- successful authenticated mTLS telemetry
+- certificate identity to payload identity binding
+- rejection of unknown but CA-signed agent identities
+- rejection of certificates signed by an unknown CA
+
 ## Quality checks
 
 Run Ruff:
@@ -467,7 +582,10 @@ uv run mypy src
 Run Bandit:
 
 ```bash
-uv run bandit -q -r src
+uv run bandit \
+  -q \
+  -r src \
+  -x src/opssight/generated
 ```
 
 Build the Python package:
@@ -476,17 +594,25 @@ Build the Python package:
 uv build
 ```
 
-Build the Docker image:
+Build the Docker image from the NexusOps repository root:
 
 ```bash
 cd ~/projects/nexusops
 
 docker build \
+  --file opssight/Dockerfile \
   --tag nexusops-opssight:dev \
-  opssight
+  .
 ```
 
 The runtime container uses a dedicated non-root `opssight` user.
+
+The image exposes the HTTP API port and the gRPC telemetry port:
+
+```text
+8000
+50051
+```
 
 ## CI
 
@@ -495,6 +621,7 @@ The OpsSight GitHub Actions workflow runs automatically for relevant changes.
 Current quality gates include:
 
 ```text
+Protobuf generation and import validation
 Ruff
 mypy
 Bandit
@@ -515,6 +642,6 @@ The Docker smoke test starts a real TimescaleDB container, applies the OpsSight 
 
 ## Current scope
 
-OpsSight currently provides the monitoring and security processing foundation for NexusOps.
+OpsSight currently provides the monitoring, telemetry, alerting, and security processing foundation for NexusOps.
 
-The service is designed so that additional NexusOps components can send telemetry and operational data to it through versioned integration contracts in later project milestones.
+SentinelAgent can deliver durable Protobuf telemetry to OpsSight through the shared `telemetry.v1` gRPC contract, with mutual TLS providing transport encryption and certificate-bound agent identity.

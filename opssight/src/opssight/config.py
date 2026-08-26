@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     grpc_port: int = 50051
     grpc_max_workers: int = 10
 
+    grpc_mtls_enabled: bool = False
+    grpc_mtls_ca_certificate_path: str | None = None
+    grpc_mtls_server_certificate_path: str | None = None
+    grpc_mtls_server_private_key_path: str | None = None
+    grpc_mtls_allowed_agent_ids: str = ""
+
     model_config = SettingsConfigDict(
         env_prefix="OPSSIGHT_",
         case_sensitive=False,

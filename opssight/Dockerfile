@@ -43,7 +43,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-RUN groupadd \
+RUN apt-get update \
+    && apt-get upgrade \
+      --yes \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd \
       --system \
       opssight \
     && useradd \
@@ -70,6 +74,6 @@ COPY --from=builder \
 
 USER opssight
 
-EXPOSE 8000
+EXPOSE 8000 50051
 
 CMD ["uvicorn", "opssight.main:app", "--host", "0.0.0.0", "--port", "8000"]

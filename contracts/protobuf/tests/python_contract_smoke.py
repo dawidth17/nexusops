@@ -8,6 +8,7 @@ def main() -> None:
     envelope = telemetry_pb2.TelemetryEnvelope(
         agent_id="contract-test-agent",
         batch_id="contract-test-batch",
+        correlation_id="contract-test-correlation",
     )
 
     record = envelope.metrics.records.add()
@@ -22,6 +23,11 @@ def main() -> None:
     assert envelope.WhichOneof("body") == "metrics"
 
     assert len(envelope.metrics.records) == 1
+
+    assert (
+        envelope.correlation_id
+        == "contract-test-correlation"
+    )
 
     assert hasattr(
         telemetry_pb2_grpc,

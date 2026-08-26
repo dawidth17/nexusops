@@ -25,7 +25,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-
 @pytest.fixture
 def session() -> Generator[Session, None, None]:
     with SessionFactory() as database_session:
@@ -36,7 +35,9 @@ def session() -> Generator[Session, None, None]:
 def test_database_schema() -> None:
     inspector = inspect(engine)
 
-    tables = set(inspector.get_table_names())
+    tables = set(
+        inspector.get_table_names()
+    )
 
     assert {
         "alembic_version",
@@ -45,7 +46,35 @@ def test_database_schema() -> None:
         "alert_rules",
         "alerts",
         "telemetry",
-    }.issubset(tables)
+        "telemetry_batches",
+        "outbox_events",
+    }.issubset(
+        tables
+    )
+
+    alert_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "alerts"
+        )
+    }
+
+    telemetry_batch_columns = {
+        column["name"]
+        for column in inspector.get_columns(
+            "telemetry_batches"
+        )
+    }
+
+    assert (
+        "correlation_id"
+        in alert_columns
+    )
+
+    assert (
+        "correlation_id"
+        in telemetry_batch_columns
+    )
 
 
 def test_telemetry_is_hypertable(session: Session) -> None:
@@ -137,6 +166,7 @@ def test_monitoring_relationships(session: Session) -> None:
     alert = Alert(
         alert_rule=alert_rule,
         status=AlertStatus.OPEN.value,
+        correlation_id="relationship-test-correlation",
         message="service health check failed",
     )
 
@@ -151,6 +181,11 @@ def test_monitoring_relationships(session: Session) -> None:
 
     assert alert.alert_rule is alert_rule
     assert alert in alert_rule.alerts
+
+    assert (
+        alert.correlation_id
+        == "relationship-test-correlation"
+    )
 
 
 def test_telemetry_can_be_persisted_and_queried(

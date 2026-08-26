@@ -22,6 +22,10 @@ class Alert(Base):
             unique=True,
             postgresql_where=text("status = 'open'"),
         ),
+        Index(
+            "ix_alerts_correlation_id",
+            "correlation_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -42,6 +46,11 @@ class Alert(Base):
         String(20),
         nullable=False,
         default=AlertStatus.OPEN.value,
+    )
+
+    correlation_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
     )
 
     message: Mapped[str] = mapped_column(

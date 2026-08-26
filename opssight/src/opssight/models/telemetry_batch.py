@@ -1,7 +1,14 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from opssight.models.base import Base
@@ -21,6 +28,10 @@ class TelemetryBatch(Base):
             "agent_record_id",
             "accepted_at",
         ),
+        Index(
+            "ix_telemetry_batches_correlation_id",
+            "correlation_id",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -38,6 +49,11 @@ class TelemetryBatch(Base):
 
     batch_id: Mapped[str] = mapped_column(
         String(200),
+        nullable=False,
+    )
+
+    correlation_id: Mapped[str] = mapped_column(
+        String(128),
         nullable=False,
     )
 

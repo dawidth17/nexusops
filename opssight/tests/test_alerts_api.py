@@ -23,6 +23,8 @@ pytestmark = pytest.mark.skipif(
     reason="api tests require a dedicated test database",
 )
 
+CORRELATION_ID = "alert-api-test-correlation"
+
 
 @pytest.fixture
 def session() -> Generator[Session, None, None]:
@@ -92,6 +94,7 @@ def create_test_alert(
     alert = Alert(
         alert_rule=rule,
         status=AlertStatus.OPEN.value,
+        correlation_id=CORRELATION_ID,
         message="http check failed",
         opened_at=datetime.now(UTC),
     )
@@ -122,6 +125,7 @@ def test_viewer_can_list_alerts(
     override_database_session(
         session
     )
+
     override_role(
         Role.VIEWER
     )
@@ -144,9 +148,25 @@ def test_viewer_can_list_alerts(
 
     returned_alert = matching_alerts[0]
 
-    assert returned_alert["status"] == AlertStatus.OPEN.value
-    assert returned_alert["message"] == "http check failed"
-    assert returned_alert["recovered_at"] is None
+    assert (
+        returned_alert["status"]
+        == AlertStatus.OPEN.value
+    )
+
+    assert (
+        returned_alert["correlation_id"]
+        == CORRELATION_ID
+    )
+
+    assert (
+        returned_alert["message"]
+        == "http check failed"
+    )
+
+    assert (
+        returned_alert["recovered_at"]
+        is None
+    )
 
 
 def test_viewer_can_get_alert(
@@ -159,6 +179,7 @@ def test_viewer_can_get_alert(
     override_database_session(
         session
     )
+
     override_role(
         Role.VIEWER
     )
@@ -173,9 +194,25 @@ def test_viewer_can_get_alert(
 
     body = response.json()
 
-    assert body["id"] == str(alert.id)
-    assert body["alert_rule_id"] == str(alert.alert_rule_id)
-    assert body["status"] == AlertStatus.OPEN.value
+    assert (
+        body["id"]
+        == str(alert.id)
+    )
+
+    assert (
+        body["alert_rule_id"]
+        == str(alert.alert_rule_id)
+    )
+
+    assert (
+        body["status"]
+        == AlertStatus.OPEN.value
+    )
+
+    assert (
+        body["correlation_id"]
+        == CORRELATION_ID
+    )
 
 
 def test_missing_alert_returns_404(
@@ -184,6 +221,7 @@ def test_missing_alert_returns_404(
     override_database_session(
         session
     )
+
     override_role(
         Role.VIEWER
     )
@@ -195,6 +233,7 @@ def test_missing_alert_returns_404(
     )
 
     assert response.status_code == 404
+
     assert response.json() == {
         "detail": "alert not found"
     }
@@ -229,6 +268,7 @@ def test_authorized_roles_can_list_alerts(
     override_database_session(
         session
     )
+
     override_role(
         role
     )

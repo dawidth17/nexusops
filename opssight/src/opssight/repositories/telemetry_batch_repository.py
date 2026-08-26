@@ -11,12 +11,14 @@ def create_telemetry_batch(
     session: Session,
     agent_record_id: UUID,
     batch_id: str,
+    correlation_id: str,
     acknowledged_through_sequence: int,
     accepted_at: datetime,
 ) -> TelemetryBatch:
     telemetry_batch = TelemetryBatch(
         agent_record_id=agent_record_id,
         batch_id=batch_id,
+        correlation_id=correlation_id,
         acknowledged_through_sequence=acknowledged_through_sequence,
         accepted_at=accepted_at,
     )

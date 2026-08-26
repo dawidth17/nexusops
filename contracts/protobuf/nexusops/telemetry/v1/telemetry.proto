@@ -13,6 +13,7 @@ message TelemetryEnvelope {
   string agent_id = 1;
   string batch_id = 2;
   google.protobuf.Timestamp sent_at = 3;
+  string correlation_id = 4;
 
   oneof body {
     Heartbeat heartbeat = 10;

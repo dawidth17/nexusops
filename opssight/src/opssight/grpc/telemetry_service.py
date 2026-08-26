@@ -7,6 +7,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from opssight.correlation import resolve_telemetry_correlation_id
 from opssight.database import SessionFactory
 from opssight.generated.nexusops.telemetry.v1 import (
     telemetry_pb2,
@@ -50,6 +51,7 @@ def _build_timestamp(
     value: datetime,
 ) -> Timestamp:
     timestamp = Timestamp()
+
     timestamp.FromDatetime(
         value.astimezone(UTC)
     )
@@ -166,6 +168,23 @@ def _validate_envelope(
     return body
 
 
+def _resolve_correlation_id(
+    envelope: telemetry_pb2.TelemetryEnvelope,
+) -> str:
+    try:
+        return resolve_telemetry_correlation_id(
+            envelope.agent_id.strip(),
+            envelope.batch_id.strip(),
+            envelope.correlation_id or None,
+        )
+
+    except ValueError as error:
+        raise TelemetryRequestError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            str(error),
+        ) from error
+
+
 def _validate_metric_batch(
     metric_batch: telemetry_pb2.MetricBatch,
 ) -> None:
@@ -269,11 +288,13 @@ def _base_labels(
     agent: Agent,
     batch_id: str,
     sequence: int,
+    correlation_id: str,
 ) -> dict[str, str]:
     return {
         "agent_id": agent.agent_id,
         "batch_id": batch_id,
         "sequence": str(sequence),
+        "correlation_id": correlation_id,
     }
 
 
@@ -281,6 +302,7 @@ def _persist_system_metrics(
     session: Session,
     agent: Agent,
     batch_id: str,
+    correlation_id: str,
     record: telemetry_pb2.TelemetryRecord,
     captured_at: datetime,
 ) -> None:
@@ -288,6 +310,7 @@ def _persist_system_metrics(
         agent,
         batch_id,
         record.sequence,
+        correlation_id,
     )
 
     metrics = (
@@ -329,6 +352,7 @@ def _persist_network_snapshot(
     session: Session,
     agent: Agent,
     batch_id: str,
+    correlation_id: str,
     record: telemetry_pb2.TelemetryRecord,
     captured_at: datetime,
 ) -> None:
@@ -337,6 +361,7 @@ def _persist_network_snapshot(
             agent,
             batch_id,
             record.sequence,
+            correlation_id,
         )
 
         labels.update(
@@ -406,6 +431,7 @@ def _persist_process_snapshot(
     session: Session,
     agent: Agent,
     batch_id: str,
+    correlation_id: str,
     record: telemetry_pb2.TelemetryRecord,
     captured_at: datetime,
 ) -> None:
@@ -414,6 +440,7 @@ def _persist_process_snapshot(
             agent,
             batch_id,
             record.sequence,
+            correlation_id,
         )
 
         labels.update(
@@ -440,6 +467,7 @@ def _persist_metric_batch(
     session: Session,
     agent: Agent,
     batch_id: str,
+    correlation_id: str,
     metric_batch: telemetry_pb2.MetricBatch,
 ) -> int:
     acknowledged_through_sequence = 0
@@ -458,6 +486,7 @@ def _persist_metric_batch(
                 session,
                 agent,
                 batch_id,
+                correlation_id,
                 record,
                 captured_at,
             )
@@ -467,6 +496,7 @@ def _persist_metric_batch(
                 session,
                 agent,
                 batch_id,
+                correlation_id,
                 record,
                 captured_at,
             )
@@ -476,6 +506,7 @@ def _persist_metric_batch(
                 session,
                 agent,
                 batch_id,
+                correlation_id,
                 record,
                 captured_at,
             )
@@ -494,6 +525,10 @@ def process_telemetry_envelope(
         authenticated_agent_id,
     )
 
+    correlation_id = _resolve_correlation_id(
+        envelope
+    )
+
     accepted_at = datetime.now(UTC)
 
     with SessionFactory() as session:
@@ -504,13 +539,27 @@ def process_telemetry_envelope(
                 body,
             )
 
+            batch_id = envelope.batch_id.strip()
+
             existing_batch = get_telemetry_batch(
                 session,
                 agent_record_id=agent.id,
-                batch_id=envelope.batch_id.strip(),
+                batch_id=batch_id,
             )
 
             if existing_batch is not None:
+                if (
+                    existing_batch.correlation_id
+                    != correlation_id
+                ):
+                    raise TelemetryRequestError(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        (
+                            "batch correlation_id does not match "
+                            "previously accepted batch"
+                        ),
+                    )
+
                 mark_agent_seen(
                     session,
                     agent,
@@ -518,6 +567,15 @@ def process_telemetry_envelope(
                 )
 
                 session.commit()
+
+                logger.info(
+                    "telemetry_batch_duplicate",
+                    extra={
+                        "agent_id": agent.agent_id,
+                        "batch_id": batch_id,
+                        "correlation_id": correlation_id,
+                    },
+                )
 
                 return _build_ack(
                     existing_batch
@@ -530,7 +588,8 @@ def process_telemetry_envelope(
                     _persist_metric_batch(
                         session,
                         agent,
-                        envelope.batch_id.strip(),
+                        batch_id,
+                        correlation_id,
                         envelope.metrics,
                     )
                 )
@@ -553,7 +612,8 @@ def process_telemetry_envelope(
             batch = create_telemetry_batch(
                 session,
                 agent_record_id=agent.id,
-                batch_id=envelope.batch_id.strip(),
+                batch_id=batch_id,
+                correlation_id=correlation_id,
                 acknowledged_through_sequence=(
                     acknowledged_through_sequence
                 ),
@@ -561,6 +621,15 @@ def process_telemetry_envelope(
             )
 
             session.commit()
+
+            logger.info(
+                "telemetry_batch_accepted",
+                extra={
+                    "agent_id": agent.agent_id,
+                    "batch_id": batch_id,
+                    "correlation_id": correlation_id,
+                },
+            )
 
             return _build_ack(
                 batch
@@ -572,13 +641,16 @@ def process_telemetry_envelope(
 
         except SQLAlchemyError:
             session.rollback()
+
             logger.exception(
                 "telemetry_database_error",
                 extra={
                     "agent_id": envelope.agent_id,
                     "batch_id": envelope.batch_id,
+                    "correlation_id": correlation_id,
                 },
             )
+
             raise
 
 
@@ -608,6 +680,7 @@ class TelemetryService(
                         self._allowed_agent_ids,
                     )
                 )
+
             except GrpcClientIdentityError as exc:
                 context.abort(
                     exc.status_code,

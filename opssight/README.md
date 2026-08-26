@@ -15,6 +15,7 @@ OpsSight currently provides:
 - deterministic alert evaluation
 - security signal processing and findings
 - runbook management
+- Keycloak OIDC authentication
 - role-based API authorization
 - Prometheus metrics
 - Docker-based local deployment
@@ -32,6 +33,9 @@ OpsSight currently provides:
 - Alembic
 - Celery
 - RabbitMQ
+- Keycloak
+- OpenID Connect
+- JWT
 - Prometheus
 - Grafana
 - Docker
@@ -48,7 +52,7 @@ opssight/
 ├── src/opssight/
 │   ├── alerting/            alert evaluation
 │   ├── api/                 REST API
-│   ├── auth/                authorization
+│   ├── auth/                OIDC authentication and authorization
 │   ├── checks/              DNS, TCP, HTTP, and TLS checks
 │   ├── grpc/                telemetry gRPC server and security
 │   ├── models/              SQLAlchemy models
@@ -96,32 +100,43 @@ The FastAPI process also starts the OpsSight telemetry gRPC server.
                   └───────────────┘
 
 
-                         Clients
+                         User
+                          │
+                          ▼
+                       Console
+                          │
+                     OIDC + PKCE
+                          │
+                          ▼
+                       Keycloak
+                          │
+                     access token
+                          │
+                          ▼
+                    ┌───────────┐
+                    │  OpsSight │
+                    │ REST API  │
+                    └─────┬─────┘
+                          │
+                 ┌────────┴────────┐
+                 │                 │
+                 ▼                 ▼
+        ┌────────────────┐   ┌──────────────┐
+        │ TimescaleDB /  │   │   RabbitMQ   │
+        │  PostgreSQL    │   └──────┬───────┘
+        └────────────────┘          │
+                                   ▼
+                            ┌──────────────┐
+                            │Celery worker │
+                            └──────┬───────┘
+                                   │
+                                   ▼
+                           monitoring checks
+
+                     Celery scheduler
                             │
                             ▼
-                     ┌──────────────┐
-                     │ FastAPI API  │
-                     └──────┬───────┘
-                            │
-                   ┌────────┴────────┐
-                   │                 │
-                   ▼                 ▼
-          ┌────────────────┐   ┌──────────────┐
-          │ TimescaleDB /  │   │   RabbitMQ   │
-          │  PostgreSQL    │   └──────┬───────┘
-          └────────────────┘          │
-                                     ▼
-                              ┌──────────────┐
-                              │Celery worker │
-                              └──────┬───────┘
-                                     │
-                                     ▼
-                             monitoring checks
-
-                       Celery scheduler
-                              │
-                              ▼
-                     dispatch due checks
+                   dispatch due checks
 ```
 
 The same OpsSight Docker image is used for:
@@ -273,24 +288,6 @@ OPSSIGHT_GRPC_MTLS_SERVER_PRIVATE_KEY_PATH
 OPSSIGHT_GRPC_MTLS_ALLOWED_AGENT_IDS
 ```
 
-For example:
-
-```bash
-export OPSSIGHT_GRPC_MTLS_ENABLED=true
-
-export OPSSIGHT_GRPC_MTLS_CA_CERTIFICATE_PATH=\
-../infra/certs/generated/ca/ca.cert.pem
-
-export OPSSIGHT_GRPC_MTLS_SERVER_CERTIFICATE_PATH=\
-../infra/certs/generated/server/server.cert.pem
-
-export OPSSIGHT_GRPC_MTLS_SERVER_PRIVATE_KEY_PATH=\
-../infra/certs/generated/server/server.key.pem
-
-export OPSSIGHT_GRPC_MTLS_ALLOWED_AGENT_IDS=\
-sentinel-local
-```
-
 Development certificate generation, agent enrollment, certificate rotation, and the complete local mTLS integration procedure are documented in:
 
 ```text
@@ -328,11 +325,53 @@ Operational endpoints:
 
 `/metrics` exposes Prometheus metrics.
 
+## Authentication
+
+OpsSight uses Keycloak as the identity provider for human users.
+
+The API validates JWT access tokens using the Keycloak JWKS endpoint.
+
+Token validation verifies:
+
+- JWT signature
+- expected issuer
+- token expiration
+- subject identity
+
+Missing or invalid access tokens are rejected with HTTP `401`.
+
+Authenticated users without the required NexusOps role are rejected with HTTP `403`.
+
+Authentication is enabled through:
+
+```text
+OPSSIGHT_OIDC_ENABLED=true
+```
+
+The main OIDC settings are:
+
+```text
+OPSSIGHT_OIDC_ENABLED
+OPSSIGHT_OIDC_ISSUER
+OPSSIGHT_OIDC_JWKS_URL
+OPSSIGHT_OIDC_CLIENT_ID
+```
+
+The default local issuer is:
+
+```text
+http://127.0.0.1:8081/realms/nexusops
+```
+
+The browser-visible issuer remains the same when OpsSight runs in Docker.
+
+The JWKS endpoint can use the internal Docker network to communicate directly with Keycloak.
+
 ## Authorization
 
-OpsSight includes a role-based authorization abstraction.
+OpsSight enforces authorization server-side.
 
-Current roles include:
+The application authorization roles are:
 
 ```text
 viewer
@@ -340,9 +379,26 @@ operator
 admin
 ```
 
-Different API operations require different roles.
+Shared NexusOps Keycloak roles are mapped to OpsSight roles.
 
-The current authorization layer is intentionally separated from the identity provider so that external authentication can be integrated later without coupling API business logic to a specific provider.
+The current mapping is:
+
+```text
+viewer      -> VIEWER
+employee    -> VIEWER
+
+operator    -> OPERATOR
+technician  -> OPERATOR
+manager     -> OPERATOR
+
+admin       -> ADMIN
+```
+
+Keycloak composite roles allow a user such as a technician to receive the required shared permissions.
+
+API business logic depends on the internal OpsSight authorization abstraction rather than directly on Keycloak-specific objects.
+
+This keeps authentication infrastructure separate from domain authorization rules.
 
 ## Background processing
 
@@ -396,7 +452,7 @@ Grafana is provisioned with:
 
 The project uses `uv` for Python dependency and environment management.
 
-From **Ubuntu / WSL**:
+From Ubuntu / WSL:
 
 ```bash
 cd ~/projects/nexusops/opssight
@@ -452,7 +508,7 @@ curl http://127.0.0.1:8000/metrics
 
 Alembic manages the OpsSight database schema.
 
-From **Ubuntu / WSL**:
+From Ubuntu / WSL:
 
 ```bash
 cd ~/projects/nexusops/opssight
@@ -487,16 +543,19 @@ infra/compose
 It includes:
 
 - ServiceCore PostgreSQL
+- ServiceCore API
 - OpsSight TimescaleDB
 - RabbitMQ
 - OpsSight migration container
 - OpsSight API
 - OpsSight Celery worker
 - OpsSight scheduler
+- Keycloak
+- NexusOps Console
 - Prometheus
 - Grafana
 
-From **Ubuntu / WSL**:
+From Ubuntu / WSL:
 
 ```bash
 cd ~/projects/nexusops/infra/compose
@@ -512,12 +571,15 @@ docker compose ps -a
 
 The migration container should finish successfully and exit.
 
-The API, worker, scheduler, database, RabbitMQ, Prometheus, and Grafana services remain running.
+The remaining long-running services should remain running.
 
 Useful local endpoints:
 
 ```text
+ServiceCore API    http://127.0.0.1:8080
 OpsSight API       http://127.0.0.1:8000
+Keycloak           http://127.0.0.1:8081
+NexusOps Console   http://127.0.0.1:3001
 Prometheus         http://127.0.0.1:9090
 Grafana            http://127.0.0.1:3000
 RabbitMQ UI        http://127.0.0.1:15672
@@ -537,13 +599,17 @@ Stop the stack and remove its persistent volumes:
 docker compose down -v
 ```
 
+Keycloak development data is intentionally reproducible from the versioned realm configuration.
+
+Development users are created separately and are not stored in Git.
+
 ## Testing
 
 Tests use pytest.
 
 A separate test database should be used for database-backed tests.
 
-From **Ubuntu / WSL**:
+From Ubuntu / WSL:
 
 ```bash
 cd ~/projects/nexusops/opssight
@@ -558,8 +624,19 @@ uv run pytest -v
 
 The test infrastructure applies migrations and resets database state between tests while preserving the database schema.
 
-The gRPC integration tests also cover:
+OIDC tests cover:
 
+- valid signed access tokens
+- invalid signatures
+- invalid issuers
+- expired tokens
+- role mapping
+- tokens without a supported NexusOps role
+
+The gRPC integration tests cover:
+
+- telemetry delivery
+- telemetry deduplication
 - successful authenticated mTLS telemetry
 - certificate identity to payload identity binding
 - rejection of unknown but CA-signed agent identities
@@ -638,10 +715,22 @@ Prometheus state metrics verification
 Trivy image scan
 ```
 
-The Docker smoke test starts a real TimescaleDB container, applies the OpsSight migrations, starts the OpsSight image, and verifies the health and metrics endpoints.
+NexusOps also has an identity integration workflow that validates:
+
+- Keycloak realm configuration
+- Docker Compose identity configuration
+- Console JavaScript
+- Keycloak startup
+- Console availability
+- development user provisioning
+- real Keycloak access token issuance
+- token subject claim
+- composite role claims
 
 ## Current scope
 
-OpsSight currently provides the monitoring, telemetry, alerting, and security processing foundation for NexusOps.
+OpsSight currently provides the monitoring, telemetry, alerting, security processing, and authenticated API foundation for NexusOps.
 
-SentinelAgent can deliver durable Protobuf telemetry to OpsSight through the shared `telemetry.v1` gRPC contract, with mutual TLS providing transport encryption and certificate-bound agent identity.
+SentinelAgent can deliver durable Protobuf telemetry through the shared `telemetry.v1` gRPC contract with mutual TLS.
+
+Human users authenticate through the shared NexusOps Keycloak realm and use JWT access tokens to access the OpsSight REST API according to their roles.

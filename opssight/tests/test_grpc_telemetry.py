@@ -11,6 +11,7 @@ from opssight.generated.nexusops.telemetry.v1 import (
     telemetry_pb2,
     telemetry_pb2_grpc,
 )
+from opssight.grpc.security import GrpcMtlsConfiguration
 from opssight.grpc.server import create_grpc_server
 from opssight.models.agent import Agent
 from opssight.models.telemetry import Telemetry
@@ -35,6 +36,9 @@ def test_grpc_telemetry_delivery_and_deduplication() -> None:
     server, port = create_grpc_server(
         host="127.0.0.1",
         port=0,
+        mtls_configuration=GrpcMtlsConfiguration(
+            enabled=False
+        ),
     )
 
     server.start()

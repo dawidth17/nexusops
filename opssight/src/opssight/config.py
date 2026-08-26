@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     grpc_mtls_server_private_key_path: str | None = None
     grpc_mtls_allowed_agent_ids: str = ""
 
+    oidc_enabled: bool = False
+    oidc_issuer: str = (
+        "http://127.0.0.1:8081/realms/nexusops"
+    )
+    oidc_jwks_url: str = (
+        "http://127.0.0.1:8081/realms/"
+        "nexusops/protocol/openid-connect/certs"
+    )
+    oidc_client_id: str = "opssight"
+
     model_config = SettingsConfigDict(
         env_prefix="OPSSIGHT_",
         case_sensitive=False,

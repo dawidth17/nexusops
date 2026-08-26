@@ -96,13 +96,14 @@ class FlywayMigrationFromZeroTests {
                                     "6",
                                     "7",
                                     "8",
-                                    "9"
+                                    "9",
+                                    "10"
                             )
                     )
             );
 
             assertEquals(
-                    9,
+                    10,
                     versions.size()
             );
         }
@@ -122,7 +123,8 @@ class FlywayMigrationFromZeroTests {
                         "asset_assignments",
                         "knowledge_articles",
                         "knowledge_article_versions",
-                        "audit_entries"
+                        "audit_entries",
+                        "processed_events"
                 );
 
         try (
@@ -161,6 +163,13 @@ class FlywayMigrationFromZeroTests {
             Connection connection
     ) throws SQLException {
 
+        Set<String> expectedIndexes =
+                Set.of(
+                        "uq_asset_assignments_active_asset",
+                        "uq_incidents_monitoring_source_alert",
+                        "ix_processed_events_processed_at"
+                );
+
         try (
                 Statement statement =
                         connection.createStatement();
@@ -168,19 +177,27 @@ class FlywayMigrationFromZeroTests {
                 ResultSet resultSet =
                         statement.executeQuery(
                                 """
-                                SELECT COUNT(*)
+                                SELECT indexname
                                 FROM pg_indexes
                                 WHERE schemaname = 'public'
-                                  AND indexname =
-                                      'uq_asset_assignments_active_asset'
                                 """
                         )
         ) {
-            assertTrue(resultSet.next());
+            Set<String> actualIndexes =
+                    new HashSet<>();
 
-            assertEquals(
-                    1,
-                    resultSet.getInt(1)
+            while (resultSet.next()) {
+                actualIndexes.add(
+                        resultSet.getString(
+                                "indexname"
+                        )
+                );
+            }
+
+            assertTrue(
+                    actualIndexes.containsAll(
+                            expectedIndexes
+                    )
             );
         }
     }

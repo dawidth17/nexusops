@@ -2,6 +2,7 @@ package com.nexusops.servicecore.incident.application;
 
 import com.nexusops.servicecore.incident.domain.Impact;
 import com.nexusops.servicecore.incident.domain.Incident;
+import com.nexusops.servicecore.incident.domain.IncidentSource;
 import com.nexusops.servicecore.incident.domain.Urgency;
 import com.nexusops.servicecore.incident.repository.IncidentRepository;
 import com.nexusops.servicecore.incident.repository.IncidentSpecifications;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -48,11 +50,65 @@ public class IncidentService {
         );
 
         Incident savedIncident =
-                incidentRepository.saveAndFlush(incident);
+                incidentRepository.saveAndFlush(
+                        incident
+                );
 
-        slaService.createForIncident(savedIncident);
+        slaService.createForIncident(
+                savedIncident
+        );
 
         return savedIncident;
+    }
+
+    public Incident createFromMonitoring(
+            String title,
+            String description,
+            Impact impact,
+            Urgency urgency,
+            UUID sourceAlertId,
+            String correlationId
+    ) {
+        return incidentRepository
+                .findBySourceAndSourceAlertId(
+                        IncidentSource.MONITORING,
+                        sourceAlertId
+                )
+                .orElseGet(
+                        () -> createMonitoringIncident(
+                                title,
+                                description,
+                                impact,
+                                urgency,
+                                sourceAlertId,
+                                correlationId
+                        )
+                );
+    }
+
+    public Incident recordMonitoringRecovery(
+            UUID sourceAlertId,
+            Instant recoveredAt,
+            String recoveryMessage
+    ) {
+        Incident incident = incidentRepository
+                .findBySourceAndSourceAlertId(
+                        IncidentSource.MONITORING,
+                        sourceAlertId
+                )
+                .orElseThrow(
+                        () -> new IllegalStateException(
+                                "monitoring incident not found for alert "
+                                        + sourceAlertId
+                        )
+                );
+
+        incident.recordMonitoringRecovery(
+                recoveredAt,
+                recoveryMessage
+        );
+
+        return incident;
     }
 
     @Transactional(readOnly = true)
@@ -126,7 +182,9 @@ public class IncidentService {
             Impact impact,
             Urgency urgency
     ) {
-        Incident incident = findIncident(incidentId);
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.updateAssessment(
                 impact,
@@ -140,9 +198,13 @@ public class IncidentService {
             UUID incidentId,
             String teamId
     ) {
-        Incident incident = findIncident(incidentId);
+        Incident incident = findIncident(
+                incidentId
+        );
 
-        incident.assignToTeam(teamId);
+        incident.assignToTeam(
+                teamId
+        );
 
         return incident;
     }
@@ -151,31 +213,47 @@ public class IncidentService {
             UUID incidentId,
             String assigneeId
     ) {
-        Incident incident = findIncident(incidentId);
+        Incident incident = findIncident(
+                incidentId
+        );
 
-        incident.assignToUser(assigneeId);
+        incident.assignToUser(
+                assigneeId
+        );
 
         return incident;
     }
 
-    public Incident clearAssignee(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident clearAssignee(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.clearAssignee();
 
         return incident;
     }
 
-    public Incident clearTeam(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident clearTeam(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.clearTeam();
 
         return incident;
     }
 
-    public Incident startProgress(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident startProgress(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.startProgress();
 
@@ -187,16 +265,24 @@ public class IncidentService {
         return incident;
     }
 
-    public Incident returnToOpen(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident returnToOpen(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.returnToOpen();
 
         return incident;
     }
 
-    public Incident resolve(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident resolve(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.resolve();
 
@@ -208,27 +294,70 @@ public class IncidentService {
         return incident;
     }
 
-    public Incident reopen(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident reopen(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.reopen();
 
-        slaService.markReopened(incidentId);
+        slaService.markReopened(
+                incidentId
+        );
 
         return incident;
     }
 
-    public Incident close(UUID incidentId) {
-        Incident incident = findIncident(incidentId);
+    public Incident close(
+            UUID incidentId
+    ) {
+        Incident incident = findIncident(
+                incidentId
+        );
 
         incident.close();
 
         return incident;
     }
 
-    private Incident findIncident(UUID incidentId) {
+    private Incident createMonitoringIncident(
+            String title,
+            String description,
+            Impact impact,
+            Urgency urgency,
+            UUID sourceAlertId,
+            String correlationId
+    ) {
+        Incident incident = Incident.createFromMonitoring(
+                title,
+                description,
+                impact,
+                urgency,
+                sourceAlertId,
+                correlationId
+        );
+
+        Incident savedIncident =
+                incidentRepository.saveAndFlush(
+                        incident
+                );
+
+        slaService.createForIncident(
+                savedIncident
+        );
+
+        return savedIncident;
+    }
+
+    private Incident findIncident(
+            UUID incidentId
+    ) {
         return incidentRepository
-                .findById(incidentId)
+                .findById(
+                        incidentId
+                )
                 .orElseThrow(
                         () -> new IncidentNotFoundException(
                                 incidentId

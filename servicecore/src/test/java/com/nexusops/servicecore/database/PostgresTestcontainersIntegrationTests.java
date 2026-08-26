@@ -64,7 +64,7 @@ class PostgresTestcontainersIntegrationTests {
         assertNotNull(successfulMigrations);
 
         assertEquals(
-                9,
+                10,
                 successfulMigrations
         );
 
@@ -77,6 +77,15 @@ class PostgresTestcontainersIntegrationTests {
         assertTableExists("knowledge_articles");
         assertTableExists("knowledge_article_versions");
         assertTableExists("audit_entries");
+        assertTableExists("processed_events");
+
+        assertIndexExists(
+                "uq_incidents_monitoring_source_alert"
+        );
+
+        assertIndexExists(
+                "ix_processed_events_processed_at"
+        );
     }
 
     private void assertTableExists(
@@ -92,6 +101,27 @@ class PostgresTestcontainersIntegrationTests {
                         """,
                         Integer.class,
                         tableName
+                );
+
+        assertEquals(
+                1,
+                count
+        );
+    }
+
+    private void assertIndexExists(
+            String indexName
+    ) {
+        Integer count =
+                jdbcTemplate.queryForObject(
+                        """
+                        SELECT COUNT(*)
+                        FROM pg_indexes
+                        WHERE schemaname = 'public'
+                          AND indexname = ?
+                        """,
+                        Integer.class,
+                        indexName
                 );
 
         assertEquals(

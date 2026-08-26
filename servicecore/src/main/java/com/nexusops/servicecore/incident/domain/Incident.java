@@ -45,6 +45,25 @@ public class Incident {
     @Column(nullable = false, length = 30)
     private IncidentStatus status;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private IncidentSource source;
+
+    @Column(name = "source_alert_id")
+    private UUID sourceAlertId;
+
+    @Column(name = "correlation_id", length = 128)
+    private String correlationId;
+
+    @Column(name = "monitoring_recovered_at")
+    private Instant monitoringRecoveredAt;
+
+    @Column(
+            name = "monitoring_recovery_message",
+            columnDefinition = "TEXT"
+    )
+    private String monitoringRecoveryMessage;
+
     @Column(name = "assignee_id", length = 255)
     private String assigneeId;
 
@@ -68,10 +87,48 @@ public class Incident {
     ) {
         this.title = requireText(title, "title");
         this.description = requireText(description, "description");
-        this.impact = Objects.requireNonNull(impact, "impact must not be null");
-        this.urgency = Objects.requireNonNull(urgency, "urgency must not be null");
-        this.priority = PriorityCalculator.calculate(impact, urgency);
+        this.impact = Objects.requireNonNull(
+                impact,
+                "impact must not be null"
+        );
+        this.urgency = Objects.requireNonNull(
+                urgency,
+                "urgency must not be null"
+        );
+        this.priority = PriorityCalculator.calculate(
+                impact,
+                urgency
+        );
         this.status = IncidentStatus.OPEN;
+        this.source = IncidentSource.MANUAL;
+    }
+
+    private Incident(
+            String title,
+            String description,
+            Impact impact,
+            Urgency urgency,
+            UUID sourceAlertId,
+            String correlationId
+    ) {
+        this(
+                title,
+                description,
+                impact,
+                urgency
+        );
+
+        this.source = IncidentSource.MONITORING;
+
+        this.sourceAlertId = Objects.requireNonNull(
+                sourceAlertId,
+                "sourceAlertId must not be null"
+        );
+
+        this.correlationId = requireText(
+                correlationId,
+                "correlationId"
+        );
     }
 
     public static Incident create(
@@ -80,21 +137,83 @@ public class Incident {
             Impact impact,
             Urgency urgency
     ) {
-        return new Incident(title, description, impact, urgency);
+        return new Incident(
+                title,
+                description,
+                impact,
+                urgency
+        );
     }
 
-    public void updateAssessment(Impact impact, Urgency urgency) {
-        this.impact = Objects.requireNonNull(impact, "impact must not be null");
-        this.urgency = Objects.requireNonNull(urgency, "urgency must not be null");
-        this.priority = PriorityCalculator.calculate(impact, urgency);
+    public static Incident createFromMonitoring(
+            String title,
+            String description,
+            Impact impact,
+            Urgency urgency,
+            UUID sourceAlertId,
+            String correlationId
+    ) {
+        return new Incident(
+                title,
+                description,
+                impact,
+                urgency,
+                sourceAlertId,
+                correlationId
+        );
+    }
+
+    public void recordMonitoringRecovery(
+            Instant recoveredAt,
+            String recoveryMessage
+    ) {
+        if (source != IncidentSource.MONITORING) {
+            throw new IllegalStateException(
+                    "only monitoring incidents can record monitoring recovery"
+            );
+        }
+
+        monitoringRecoveredAt = Objects.requireNonNull(
+                recoveredAt,
+                "recoveredAt must not be null"
+        );
+
+        monitoringRecoveryMessage = requireText(
+                recoveryMessage,
+                "recoveryMessage"
+        );
+    }
+
+    public void updateAssessment(
+            Impact impact,
+            Urgency urgency
+    ) {
+        this.impact = Objects.requireNonNull(
+                impact,
+                "impact must not be null"
+        );
+        this.urgency = Objects.requireNonNull(
+                urgency,
+                "urgency must not be null"
+        );
+        this.priority = PriorityCalculator.calculate(
+                impact,
+                urgency
+        );
     }
 
     public void assignToTeam(String teamId) {
-        this.teamId = requireText(teamId, "teamId");
+        this.teamId = requireText(
+                teamId,
+                "teamId"
+        );
     }
 
     public void assignToUser(String assigneeId) {
-        this.assigneeId = requireText(assigneeId, "assigneeId");
+        this.assigneeId = requireText(
+                assigneeId,
+                "assigneeId"
+        );
     }
 
     public void clearAssignee() {
@@ -106,45 +225,67 @@ public class Incident {
     }
 
     public void startProgress() {
-        transitionTo(IncidentStatus.IN_PROGRESS);
+        transitionTo(
+                IncidentStatus.IN_PROGRESS
+        );
     }
 
     public void returnToOpen() {
-        transitionTo(IncidentStatus.OPEN);
+        transitionTo(
+                IncidentStatus.OPEN
+        );
     }
 
     public void resolve() {
-        transitionTo(IncidentStatus.RESOLVED);
+        transitionTo(
+                IncidentStatus.RESOLVED
+        );
     }
 
     public void reopen() {
-        transitionTo(IncidentStatus.IN_PROGRESS);
+        transitionTo(
+                IncidentStatus.IN_PROGRESS
+        );
     }
 
     public void close() {
-        transitionTo(IncidentStatus.CLOSED);
+        transitionTo(
+                IncidentStatus.CLOSED
+        );
     }
 
-    private void transitionTo(IncidentStatus targetStatus) {
+    private void transitionTo(
+            IncidentStatus targetStatus
+    ) {
         if (!canTransitionTo(targetStatus)) {
-            throw new InvalidIncidentTransitionException(status, targetStatus);
+            throw new InvalidIncidentTransitionException(
+                    status,
+                    targetStatus
+            );
         }
 
         status = targetStatus;
     }
 
-    private boolean canTransitionTo(IncidentStatus targetStatus) {
+    private boolean canTransitionTo(
+            IncidentStatus targetStatus
+    ) {
         return switch (status) {
             case OPEN ->
-                    targetStatus == IncidentStatus.IN_PROGRESS;
+                    targetStatus
+                            == IncidentStatus.IN_PROGRESS;
 
             case IN_PROGRESS ->
-                    targetStatus == IncidentStatus.OPEN
-                            || targetStatus == IncidentStatus.RESOLVED;
+                    targetStatus
+                            == IncidentStatus.OPEN
+                            || targetStatus
+                            == IncidentStatus.RESOLVED;
 
             case RESOLVED ->
-                    targetStatus == IncidentStatus.IN_PROGRESS
-                            || targetStatus == IncidentStatus.CLOSED;
+                    targetStatus
+                            == IncidentStatus.IN_PROGRESS
+                            || targetStatus
+                            == IncidentStatus.CLOSED;
 
             case CLOSED -> false;
         };
@@ -153,6 +294,7 @@ public class Incident {
     @PrePersist
     private void onCreate() {
         Instant now = Instant.now();
+
         createdAt = now;
         updatedAt = now;
     }
@@ -162,7 +304,10 @@ public class Incident {
         updatedAt = Instant.now();
     }
 
-    private static String requireText(String value, String fieldName) {
+    private static String requireText(
+            String value,
+            String fieldName
+    ) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(
                     fieldName + " must not be blank"
@@ -198,6 +343,26 @@ public class Incident {
 
     public IncidentStatus getStatus() {
         return status;
+    }
+
+    public IncidentSource getSource() {
+        return source;
+    }
+
+    public UUID getSourceAlertId() {
+        return sourceAlertId;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
+    }
+
+    public Instant getMonitoringRecoveredAt() {
+        return monitoringRecoveredAt;
+    }
+
+    public String getMonitoringRecoveryMessage() {
+        return monitoringRecoveryMessage;
     }
 
     public String getAssigneeId() {

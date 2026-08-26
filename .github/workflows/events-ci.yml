@@ -1,0 +1,162 @@
+name: Event Contracts CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "contracts/events/**"
+      - "contracts/README.md"
+      - "infra/kafka/**"
+      - "infra/compose/compose.yml"
+      - "infra/compose/.env.example"
+      - ".github/workflows/events-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "contracts/events/**"
+      - "contracts/README.md"
+      - "infra/kafka/**"
+      - "infra/compose/compose.yml"
+      - "infra/compose/.env.example"
+      - ".github/workflows/events-ci.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: events-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  events:
+    name: Event schemas and Kafka
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Validate event schemas
+        run: |
+          uv run \
+            --with "jsonschema[format]>=4.25.1,<5" \
+            python \
+            contracts/events/tests/validate_events.py
+
+      - name: Validate Kafka scripts
+        run: |
+          sh -n infra/kafka/create-topics.sh
+          bash -n infra/kafka/smoke-test.sh
+
+      - name: Prepare Compose environment
+        working-directory: infra/compose
+        run: |
+          cp .env.example .env
+
+      - name: Validate Compose
+        working-directory: infra/compose
+        run: |
+          docker compose config --quiet
+
+      - name: Start Kafka
+        working-directory: infra/compose
+        run: |
+          docker compose up \
+            --detach \
+            kafka
+
+      - name: Wait for Kafka
+        working-directory: infra/compose
+        run: |
+          ready=false
+
+          for attempt in {1..60}; do
+            if docker compose exec \
+              -T \
+              kafka \
+              /opt/kafka/bin/kafka-broker-api-versions.sh \
+              --bootstrap-server 127.0.0.1:19092 \
+              >/dev/null 2>&1
+            then
+              ready=true
+              break
+            fi
+
+            echo "Waiting for Kafka... $attempt/60"
+            sleep 2
+          done
+
+          if [[ "$ready" != "true" ]]; then
+            docker compose logs kafka
+            exit 1
+          fi
+
+      - name: Create NexusOps topics
+        working-directory: infra/compose
+        run: |
+          docker compose run \
+            --rm \
+            --no-deps \
+            kafka-init
+
+      - name: Verify NexusOps topics
+        working-directory: infra/compose
+        run: |
+          set -a
+          source .env
+          set +a
+
+          topics="$(
+            docker compose exec \
+              -T \
+              kafka \
+              /opt/kafka/bin/kafka-topics.sh \
+              --bootstrap-server 127.0.0.1:19092 \
+              --list
+          )"
+
+          printf '%s\n' "$topics"
+
+          printf '%s\n' "$topics" \
+            | grep \
+              -Fxq \
+              "$NEXUSOPS_KAFKA_ALERT_TOPIC"
+
+          printf '%s\n' "$topics" \
+            | grep \
+              -Fxq \
+              "$NEXUSOPS_KAFKA_INCIDENT_TOPIC"
+
+      - name: Run Kafka producer consumer smoke test
+        run: |
+          chmod +x infra/kafka/smoke-test.sh
+
+          infra/kafka/smoke-test.sh
+
+      - name: Show Kafka logs
+        if: failure()
+        working-directory: infra/compose
+        run: |
+          docker compose logs \
+            kafka \
+            kafka-init \
+            || true
+
+      - name: Clean up
+        if: always()
+        working-directory: infra/compose
+        run: |
+          docker compose down \
+            --volumes \
+            --remove-orphans \
+            || true

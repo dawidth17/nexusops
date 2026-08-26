@@ -1,0 +1,22 @@
+{
+  "eventId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  "eventType": "nexusops.incident.resolved",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-26T12:30:00Z",
+  "source": "servicecore",
+  "correlationId": "22222222-2222-4222-8222-222222222222",
+  "payload": {
+    "incidentId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "sourceAlertId": "33333333-3333-4333-8333-333333333333",
+    "title": "OpsSight alert: HTTP service unavailable",
+    "description": "HTTP check failed with status 503",
+    "impact": "HIGH",
+    "urgency": "HIGH",
+    "priority": "P1",
+    "status": "RESOLVED",
+    "assigneeId": "technician-001",
+    "teamId": "operations",
+    "createdAt": "2026-08-26T10:00:05Z",
+    "updatedAt": "2026-08-26T12:30:00Z"
+  }
+}

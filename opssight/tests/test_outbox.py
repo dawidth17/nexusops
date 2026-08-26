@@ -24,7 +24,6 @@ from opssight.outbox import (
     publish_pending_outbox_events,
 )
 
-
 database_test = pytest.mark.skipif(
     not settings.db_name.endswith("_test"),
     reason="database tests require a dedicated test database",

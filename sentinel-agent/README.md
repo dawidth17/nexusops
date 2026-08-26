@@ -8,7 +8,7 @@ The project is split into five main parts:
 - `sentinel_runtime` - C++20 scheduling, concurrency, lifecycle and network diagnostics
 - `sentinel_storage` - C++20 SQLite durable telemetry buffering
 - `sentinel_telemetry_codec` - Protobuf serialization for collected telemetry
-- `sentinel_grpc_transport` - gRPC delivery to OpsSight with acknowledgement and retry support
+- `sentinel_grpc_transport` - gRPC delivery to OpsSight with acknowledgement, retry, and mTLS support
 
 ## Current collectors
 
@@ -106,6 +106,69 @@ The next transport attempt reads the same records again and retransmits the same
 
 This provides durable retry behavior without losing telemetry when OpsSight is temporarily unavailable.
 
+## Mutual TLS
+
+SentinelAgent supports mutual TLS for its gRPC connection to OpsSight.
+
+Enable it with:
+
+```text
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED=true
+```
+
+When mTLS is enabled, SentinelAgent requires:
+
+```text
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CA_CERT_PATH
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_CERT_PATH
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_KEY_PATH
+```
+
+For example:
+
+```bash
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED=true \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CA_CERT_PATH=infra/certs/generated/ca/ca.cert.pem \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_CERT_PATH=infra/certs/generated/agents/sentinel-local/client.cert.pem \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_KEY_PATH=infra/certs/generated/agents/sentinel-local/client.key.pem \
+./sentinel-agent/build/sentinel-agent \
+  --run-seconds 12
+```
+
+SentinelAgent validates the OpsSight server certificate using the configured CA.
+
+Normal TLS hostname or IP validation is also performed against the configured OpsSight endpoint.
+
+The client certificate common name represents the authenticated SentinelAgent identity.
+
+For example:
+
+```text
+CN=sentinel-local
+```
+
+must be used with:
+
+```text
+NEXUSOPS_SENTINEL_AGENT_ID=sentinel-local
+```
+
+OpsSight validates this binding server-side.
+
+Changing only the telemetry payload agent ID therefore cannot impersonate another enrolled agent.
+
+mTLS configuration is fail-closed.
+
+If mTLS is enabled but a required certificate path is missing, unreadable, or empty, SentinelAgent stops instead of falling back to insecure gRPC transport.
+
+Development certificate generation, agent enrollment, and certificate rotation are documented in:
+
+```text
+docs/security/mtls.md
+```
+
+Generated certificates and private keys are not committed to Git.
+
 ## Telemetry flow
 
 ```text
@@ -120,6 +183,7 @@ sqlite spool
     v
 grpc transport
     |
+    | mTLS
     v
 opssight
     |
@@ -223,6 +287,8 @@ The gRPC transport tests verify:
 - reconnect and ordered retransmission
 - stable batch IDs across retry attempts
 
+The NexusOps integration tests additionally verify authenticated gRPC delivery using mTLS.
+
 AddressSanitizer is used to detect memory-safety errors.
 
 UndefinedBehaviorSanitizer detects undefined runtime behavior.
@@ -304,7 +370,10 @@ The default configuration contains:
 ```text
 NEXUSOPS_SENTINEL_SPOOL_PATH=/var/lib/nexusops-sentinel/telemetry.db
 NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:50051
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED=false
 ```
+
+mTLS can be enabled after the agent has been enrolled and its certificate material has been installed.
 
 The following environment variables are supported:
 
@@ -313,9 +382,17 @@ NEXUSOPS_SENTINEL_SPOOL_PATH
 NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT
 NEXUSOPS_SENTINEL_AGENT_ID
 NEXUSOPS_SENTINEL_HOSTNAME
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CA_CERT_PATH
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_CERT_PATH
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_KEY_PATH
 ```
 
 The agent ID and hostname overrides are optional.
+
+When mTLS is enabled, the CA certificate, client certificate, and client private key paths are required.
+
+The configured agent ID must match the identity in the client certificate.
 
 ## Installing the package
 
@@ -505,14 +582,43 @@ transport status=transport_error
 
 The SQLite spool should still contain telemetry records after the process exits.
 
-## Local OpsSight integration
+## Local OpsSight mTLS integration
 
-Start OpsSight first:
+Generate a development CA, OpsSight server certificate, and SentinelAgent certificate from the repository root:
 
 ```bash
-cd opssight
+bash infra/certs/dev-mtls.sh \
+  bootstrap \
+  sentinel-local
+```
 
-uv run uvicorn opssight.main:app
+Start OpsSight from the `opssight` directory:
+
+```bash
+set -a
+source ../infra/compose/.env
+set +a
+
+export OPSSIGHT_DB_NAME=opssight
+
+export OPSSIGHT_GRPC_MTLS_ENABLED=true
+
+export OPSSIGHT_GRPC_MTLS_CA_CERTIFICATE_PATH=\
+../infra/certs/generated/ca/ca.cert.pem
+
+export OPSSIGHT_GRPC_MTLS_SERVER_CERTIFICATE_PATH=\
+../infra/certs/generated/server/server.cert.pem
+
+export OPSSIGHT_GRPC_MTLS_SERVER_PRIVATE_KEY_PATH=\
+../infra/certs/generated/server/server.key.pem
+
+export OPSSIGHT_GRPC_MTLS_ALLOWED_AGENT_IDS=\
+sentinel-local
+
+uv run uvicorn \
+  opssight.main:app \
+  --host 127.0.0.1 \
+  --port 8000
 ```
 
 Then, from the repository root, run SentinelAgent:
@@ -522,8 +628,18 @@ NEXUSOPS_SENTINEL_SPOOL_PATH=/tmp/nexusops-sentinel-e2e.db \
 NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT=127.0.0.1:50051 \
 NEXUSOPS_SENTINEL_AGENT_ID=sentinel-local \
 NEXUSOPS_SENTINEL_HOSTNAME=sentinel-local-host \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED=true \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CA_CERT_PATH=infra/certs/generated/ca/ca.cert.pem \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_CERT_PATH=infra/certs/generated/agents/sentinel-local/client.cert.pem \
+NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_KEY_PATH=infra/certs/generated/agents/sentinel-local/client.key.pem \
 ./sentinel-agent/build/sentinel-agent \
   --run-seconds 12
+```
+
+Successful startup reports:
+
+```text
+transport_security=mtls
 ```
 
 Successful delivery produces output similar to:
@@ -544,6 +660,12 @@ Expected result:
 
 ```text
 0
+```
+
+The complete certificate enrollment and rotation procedure is documented in:
+
+```text
+docs/security/mtls.md
 ```
 
 ## Requirements

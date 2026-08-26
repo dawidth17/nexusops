@@ -12,6 +12,10 @@ from opssight.generated.nexusops.telemetry.v1 import (
     telemetry_pb2,
     telemetry_pb2_grpc,
 )
+from opssight.grpc.security import (
+    GrpcClientIdentityError,
+    resolve_authenticated_agent_id,
+)
 from opssight.models.agent import Agent
 from opssight.models.telemetry_batch import TelemetryBatch
 from opssight.repositories.agent_repository import (
@@ -71,6 +75,7 @@ def _build_ack(
 
 def _validate_envelope(
     envelope: telemetry_pb2.TelemetryEnvelope,
+    authenticated_agent_id: str | None = None,
 ) -> str:
     agent_id = envelope.agent_id.strip()
     batch_id = envelope.batch_id.strip()
@@ -85,6 +90,18 @@ def _validate_envelope(
         raise TelemetryRequestError(
             grpc.StatusCode.INVALID_ARGUMENT,
             "agent_id exceeds 200 characters",
+        )
+
+    if (
+        authenticated_agent_id is not None
+        and agent_id != authenticated_agent_id
+    ):
+        raise TelemetryRequestError(
+            grpc.StatusCode.PERMISSION_DENIED,
+            (
+                "payload agent_id does not match "
+                "authenticated certificate identity"
+            ),
         )
 
     if not batch_id:
@@ -470,9 +487,11 @@ def _persist_metric_batch(
 
 def process_telemetry_envelope(
     envelope: telemetry_pb2.TelemetryEnvelope,
+    authenticated_agent_id: str | None = None,
 ) -> telemetry_pb2.AgentControl:
     body = _validate_envelope(
-        envelope
+        envelope,
+        authenticated_agent_id,
     )
 
     accepted_at = datetime.now(UTC)
@@ -566,6 +585,12 @@ def process_telemetry_envelope(
 class TelemetryService(
     telemetry_pb2_grpc.TelemetryServiceServicer
 ):
+    def __init__(
+        self,
+        allowed_agent_ids: frozenset[str] | None = None,
+    ) -> None:
+        self._allowed_agent_ids = allowed_agent_ids
+
     def StreamTelemetry(
         self,
         request_iterator: Iterable[
@@ -573,10 +598,27 @@ class TelemetryService(
         ],
         context: grpc.ServicerContext,
     ) -> Iterator[telemetry_pb2.AgentControl]:
+        authenticated_agent_id: str | None = None
+
+        if self._allowed_agent_ids is not None:
+            try:
+                authenticated_agent_id = (
+                    resolve_authenticated_agent_id(
+                        context,
+                        self._allowed_agent_ids,
+                    )
+                )
+            except GrpcClientIdentityError as exc:
+                context.abort(
+                    exc.status_code,
+                    str(exc),
+                )
+
         for envelope in request_iterator:
             try:
                 yield process_telemetry_envelope(
-                    envelope
+                    envelope,
+                    authenticated_agent_id,
                 )
 
             except TelemetryRequestError as exc:

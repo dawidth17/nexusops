@@ -268,6 +268,76 @@ std::string resolveOpsSightEndpoint()
     return "127.0.0.1:50051";
 }
 
+bool resolveOpsSightMtlsEnabled()
+{
+    const char *configuredValue =
+        std::getenv(
+            "NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED"
+        );
+
+    if (
+        configuredValue == nullptr ||
+        configuredValue[0] == '\0'
+    ) {
+        return false;
+    }
+
+    const std::string value(
+        configuredValue
+    );
+
+    if (
+        value == "1" ||
+        value == "true" ||
+        value == "TRUE" ||
+        value == "yes" ||
+        value == "YES" ||
+        value == "on" ||
+        value == "ON"
+    ) {
+        return true;
+    }
+
+    if (
+        value == "0" ||
+        value == "false" ||
+        value == "FALSE" ||
+        value == "no" ||
+        value == "NO" ||
+        value == "off" ||
+        value == "OFF"
+    ) {
+        return false;
+    }
+
+    throw std::invalid_argument(
+        "NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED "
+        "must be true or false"
+    );
+}
+
+std::string resolveRequiredEnvironment(
+    const char *name
+)
+{
+    const char *value =
+        std::getenv(
+            name
+        );
+
+    if (
+        value == nullptr ||
+        value[0] == '\0'
+    ) {
+        throw std::invalid_argument(
+            std::string(name) +
+            " is required when OpsSight mTLS is enabled"
+        );
+    }
+
+    return value;
+}
+
 void ensureSpoolDirectory(
     const std::string &spoolPath
 )
@@ -705,6 +775,9 @@ int runAgent(
     const std::string opsSightEndpoint =
         resolveOpsSightEndpoint();
 
+    const bool mtlsEnabled =
+        resolveOpsSightMtlsEnabled();
+
     GrpcTelemetryClientOptions
         telemetryOptions;
 
@@ -725,6 +798,29 @@ int runAgent(
 
     telemetryOptions.rpcDeadline =
         transportDeadline;
+
+    telemetryOptions.mtls.enabled =
+        mtlsEnabled;
+
+    if (mtlsEnabled) {
+        telemetryOptions.mtls.
+            caCertificatePath =
+            resolveRequiredEnvironment(
+                "NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CA_CERT_PATH"
+            );
+
+        telemetryOptions.mtls.
+            clientCertificatePath =
+            resolveRequiredEnvironment(
+                "NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_CERT_PATH"
+            );
+
+        telemetryOptions.mtls.
+            clientPrivateKeyPath =
+            resolveRequiredEnvironment(
+                "NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_KEY_PATH"
+            );
+    }
 
     GrpcTelemetryClient
         telemetryClient(
@@ -1131,6 +1227,12 @@ int runAgent(
             << spoolPath
             << " opssight_endpoint="
             << opsSightEndpoint
+            << " transport_security="
+            << (
+                mtlsEnabled
+                    ? "mtls"
+                    : "insecure"
+            )
             << " agent_id="
             << agentId
             << " hostname="

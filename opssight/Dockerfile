@@ -70,6 +70,6 @@ COPY --from=builder \
 
 USER opssight
 
-EXPOSE 8000
+EXPOSE 8000 50051
 
 CMD ["uvicorn", "opssight.main:app", "--host", "0.0.0.0", "--port", "8000"]

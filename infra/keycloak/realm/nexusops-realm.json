@@ -1,0 +1,159 @@
+{
+  "realm": "nexusops",
+  "displayName": "NexusOps",
+  "enabled": true,
+  "sslRequired": "none",
+  "defaultSignatureAlgorithm": "RS256",
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "viewer",
+        "description": "Read-only access to NexusOps operational data",
+        "composite": false
+      },
+      {
+        "name": "operator",
+        "description": "Operational access to OpsSight",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "viewer"
+          ]
+        }
+      },
+      {
+        "name": "employee",
+        "description": "Standard ServiceCore user access",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "viewer"
+          ]
+        }
+      },
+      {
+        "name": "technician",
+        "description": "Technical ServiceCore and OpsSight operator access",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "employee",
+            "operator"
+          ]
+        }
+      },
+      {
+        "name": "manager",
+        "description": "Management access across NexusOps",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "technician"
+          ]
+        }
+      },
+      {
+        "name": "admin",
+        "description": "Administrative access across NexusOps",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "manager"
+          ]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "nexusops-console",
+      "name": "NexusOps Console",
+      "description": "Public OIDC client for the NexusOps web console",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "http://127.0.0.1:3001",
+      "baseUrl": "/",
+      "redirectUris": [
+        "http://127.0.0.1:3001/*",
+        "http://localhost:3001/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:3001",
+        "http://localhost:3001"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "email"
+      ]
+    },
+    {
+      "clientId": "servicecore",
+      "name": "ServiceCore API",
+      "description": "OIDC resource server identity for ServiceCore",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "opssight",
+      "name": "OpsSight API",
+      "description": "OIDC resource server identity for OpsSight",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "nexusops-dev-smoke",
+      "name": "NexusOps Development Smoke Client",
+      "description": "Development-only public client used for automated identity smoke tests",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "defaultClientScopes": [
+        "basic",
+        "roles",
+        "profile",
+        "email"
+      ]
+    }
+  ]
+}

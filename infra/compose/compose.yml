@@ -79,6 +79,59 @@ services:
       retries: 12
       start_period: 15s
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.2
+
+    command:
+      - start-dev
+      - --import-realm
+
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT}:8080"
+
+    volumes:
+      - ../keycloak/realm:/opt/keycloak/data/import:ro
+
+    networks:
+      - backend
+
+  servicecore-api:
+    build:
+      context: ../../servicecore
+      dockerfile: Dockerfile
+
+    image: nexusops-servicecore:dev
+
+    environment:
+      SPRING_PROFILES_ACTIVE: oidc
+
+      SERVICECORE_DB_HOST: servicecore-db
+      SERVICECORE_DB_PORT: "5432"
+      SERVICECORE_DB_NAME: ${SERVICECORE_DB_NAME}
+      SERVICECORE_DB_USER: ${SERVICECORE_DB_USER}
+      SERVICECORE_DB_PASSWORD: ${SERVICECORE_DB_PASSWORD}
+
+      NEXUSOPS_OIDC_ISSUER_URI: ${NEXUSOPS_OIDC_ISSUER_URI}
+      NEXUSOPS_OIDC_JWK_SET_URI: http://keycloak:8080/realms/nexusops/protocol/openid-connect/certs
+      NEXUSOPS_OIDC_CLIENT_ID: servicecore
+
+    ports:
+      - "127.0.0.1:${SERVICECORE_API_PORT}:8080"
+
+    networks:
+      - backend
+
+    depends_on:
+      servicecore-db:
+        condition: service_healthy
+
+      keycloak:
+        condition: service_started
+
   opssight-migrate:
     build:
       context: ../..
@@ -129,6 +182,11 @@ services:
       OPSSIGHT_GRPC_HOST: "0.0.0.0"
       OPSSIGHT_GRPC_PORT: "50051"
 
+      OPSSIGHT_OIDC_ENABLED: "true"
+      OPSSIGHT_OIDC_ISSUER: ${NEXUSOPS_OIDC_ISSUER_URI}
+      OPSSIGHT_OIDC_JWKS_URL: http://keycloak:8080/realms/nexusops/protocol/openid-connect/certs
+      OPSSIGHT_OIDC_CLIENT_ID: opssight
+
     ports:
       - "127.0.0.1:${OPSSIGHT_API_PORT}:8000"
       - "127.0.0.1:${OPSSIGHT_GRPC_PORT}:50051"
@@ -139,6 +197,9 @@ services:
     depends_on:
       opssight-migrate:
         condition: service_completed_successfully
+
+      keycloak:
+        condition: service_started
 
     healthcheck:
       test:
@@ -225,6 +286,22 @@ services:
 
       rabbitmq:
         condition: service_healthy
+
+  console:
+    image: nginx:1.28.1-alpine
+
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT}:80"
+
+    volumes:
+      - ../../console:/usr/share/nginx/html:ro
+
+    networks:
+      - backend
+
+    depends_on:
+      keycloak:
+        condition: service_started
 
   prometheus:
     image: prom/prometheus:v3.14.0

@@ -1,0 +1,204 @@
+name: Identity CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "console/**"
+      - "infra/keycloak/**"
+      - "infra/compose/compose.yml"
+      - "infra/compose/.env.example"
+      - "servicecore/src/main/resources/application-oidc.properties"
+      - "opssight/src/opssight/auth/**"
+      - "opssight/src/opssight/config.py"
+      - ".github/workflows/identity-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "console/**"
+      - "infra/keycloak/**"
+      - "infra/compose/compose.yml"
+      - "infra/compose/.env.example"
+      - "servicecore/src/main/resources/application-oidc.properties"
+      - "opssight/src/opssight/auth/**"
+      - "opssight/src/opssight/config.py"
+      - ".github/workflows/identity-ci.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: Keycloak and Console
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Prepare environment
+        working-directory: infra/compose
+        run: |
+          cp .env.example .env
+
+      - name: Validate realm JSON
+        run: |
+          python3 -m json.tool \
+            infra/keycloak/realm/nexusops-realm.json \
+            >/dev/null
+
+      - name: Validate Console JavaScript
+        run: |
+          node --check console/config.js
+          node --check console/app.js
+
+      - name: Validate Compose
+        working-directory: infra/compose
+        run: |
+          docker compose config --quiet
+
+      - name: Start Keycloak and Console
+        working-directory: infra/compose
+        run: |
+          docker compose up \
+            --detach \
+            keycloak \
+            console
+
+      - name: Wait for Keycloak
+        run: |
+          for attempt in {1..60}; do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://127.0.0.1:8081/realms/nexusops/.well-known/openid-configuration \
+              >/dev/null
+            then
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          docker compose \
+            --env-file infra/compose/.env \
+            -f infra/compose/compose.yml \
+            logs keycloak
+
+          exit 1
+
+      - name: Verify Console
+        run: |
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            http://127.0.0.1:3001/ \
+            | grep -q \
+              "NexusOps Console"
+
+      - name: Create development user
+        run: |
+          chmod +x \
+            infra/keycloak/create-dev-user.sh
+
+          infra/keycloak/create-dev-user.sh
+
+      - name: Verify Keycloak role token
+        working-directory: infra/compose
+        run: |
+          set -a
+          source .env
+          set +a
+
+          token_response="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --request POST \
+              --data-urlencode \
+                "grant_type=password" \
+              --data-urlencode \
+                "client_id=nexusops-dev-smoke" \
+              --data-urlencode \
+                "username=$KEYCLOAK_DEV_USER" \
+              --data-urlencode \
+                "password=$KEYCLOAK_DEV_USER_PASSWORD" \
+              http://127.0.0.1:8081/realms/nexusops/protocol/openid-connect/token
+          )"
+
+          access_token="$(
+            printf '%s' \
+              "$token_response" \
+              | python3 -c \
+                'import json,sys; print(json.load(sys.stdin)["access_token"])'
+          )"
+
+          ACCESS_TOKEN="$access_token" \
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+
+          token = os.environ["ACCESS_TOKEN"]
+          payload = token.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+
+          claims = json.loads(
+              base64.urlsafe_b64decode(
+                  payload.encode()
+              )
+          )
+
+          assert claims["iss"] == (
+              "http://127.0.0.1:8081/"
+              "realms/nexusops"
+          )
+
+          subject = claims.get("sub")
+
+          assert isinstance(subject, str)
+          assert subject.strip()
+
+          roles = set(
+              claims["realm_access"]["roles"]
+          )
+
+          required = {
+              "viewer",
+              "operator",
+              "employee",
+              "technician",
+          }
+
+          assert required <= roles
+          assert claims["exp"] > claims["iat"]
+          PY
+
+      - name: Show logs
+        if: failure()
+        run: |
+          docker compose \
+            --env-file infra/compose/.env \
+            -f infra/compose/compose.yml \
+            logs keycloak \
+            console \
+            || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker compose \
+            --env-file infra/compose/.env \
+            -f infra/compose/compose.yml \
+            down \
+            --volumes \
+            --remove-orphans \
+            || true

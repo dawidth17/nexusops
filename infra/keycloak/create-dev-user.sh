@@ -83,6 +83,8 @@ for user in users:
 ' <<<"$users_json"
 )"
 
+dev_email="${KEYCLOAK_DEV_USER}@example.invalid"
+
 if [[ -z "$user_id" ]]; then
     user_id="$(
         "${compose[@]}" exec \
@@ -93,8 +95,26 @@ if [[ -z "$user_id" ]]; then
             -r nexusops \
             -s "username=$KEYCLOAK_DEV_USER" \
             -s enabled=true \
+            -s firstName=NexusOps \
+            -s lastName=Development \
+            -s "email=$dev_email" \
+            -s emailVerified=true \
+            -s 'requiredActions=[]' \
             -i
     )"
+else
+    "${compose[@]}" exec \
+        -T \
+        keycloak \
+        /opt/keycloak/bin/kcadm.sh \
+        update "users/$user_id" \
+        -r nexusops \
+        -s enabled=true \
+        -s firstName=NexusOps \
+        -s lastName=Development \
+        -s "email=$dev_email" \
+        -s emailVerified=true \
+        -s 'requiredActions=[]'
 fi
 
 "${compose[@]}" exec \

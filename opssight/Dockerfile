@@ -43,7 +43,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-RUN groupadd \
+RUN apt-get update \
+    && apt-get upgrade \
+      --yes \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd \
       --system \
       opssight \
     && useradd \

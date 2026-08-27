@@ -1,0 +1,65 @@
+name: NexusOps E2E
+
+on:
+  push:
+    paths:
+      - "e2e/**"
+      - "console/**"
+      - "contracts/**"
+      - "infra/**"
+      - "opssight/**"
+      - "sentinel-agent/**"
+      - "servicecore/**"
+      - "docs/e2e-recovery.md"
+      - "README.md"
+      - ".github/workflows/e2e-ci.yml"
+
+  pull_request:
+    paths:
+      - "e2e/**"
+      - "console/**"
+      - "contracts/**"
+      - "infra/**"
+      - "opssight/**"
+      - "sentinel-agent/**"
+      - "servicecore/**"
+      - "docs/e2e-recovery.md"
+      - "README.md"
+      - ".github/workflows/e2e-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    name: Full recovery scenario
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install Console dependencies
+        working-directory: console
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: console
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify Docker Compose
+        run: docker compose version
+
+      - name: Run full recovery scenario
+        run: |
+          chmod +x e2e/run-recovery.sh
+          chmod +x infra/certs/dev-mtls.sh
+          e2e/run-recovery.sh

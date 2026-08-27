@@ -1,0 +1,119 @@
+services:
+  servicecore-api:
+    image: nexusops-servicecore:e2e
+
+    environment:
+      SERVICECORE_KAFKA_ENABLED: "true"
+      SERVICECORE_KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      SERVICECORE_KAFKA_ALERT_TOPIC: ${NEXUSOPS_KAFKA_ALERT_TOPIC}
+      SERVICECORE_KAFKA_CONSUMER_GROUP: servicecore-alert-lifecycle-e2e
+
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  opssight-migrate:
+    image: nexusops-opssight:e2e
+
+  opssight-api:
+    image: nexusops-opssight:e2e
+
+    environment:
+      OPSSIGHT_GRPC_MTLS_ENABLED: "true"
+      OPSSIGHT_GRPC_MTLS_CA_CERTIFICATE_PATH: /certs/ca.cert.pem
+      OPSSIGHT_GRPC_MTLS_SERVER_CERTIFICATE_PATH: /certs/server.cert.pem
+      OPSSIGHT_GRPC_MTLS_SERVER_PRIVATE_KEY_PATH: /certs/server.key.pem
+      OPSSIGHT_GRPC_MTLS_ALLOWED_AGENT_IDS: e2e-agent
+
+    volumes:
+      - ${NEXUSOPS_E2E_CERT_ROOT}/ca/ca.cert.pem:/certs/ca.cert.pem:ro
+      - ${NEXUSOPS_E2E_CERT_ROOT}/server/server.cert.pem:/certs/server.cert.pem:ro
+      - ${NEXUSOPS_E2E_CERT_ROOT}/server/server.key.pem:/certs/server.key.pem:ro
+
+  opssight-worker:
+    image: nexusops-opssight:e2e
+
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  opssight-scheduler:
+    image: nexusops-opssight:e2e
+
+  console:
+    image: nexusops-console:e2e
+
+    depends_on:
+      keycloak:
+        condition: service_started
+
+      servicecore-api:
+        condition: service_started
+
+      opssight-api:
+        condition: service_healthy
+
+  sentinel-agent:
+    build:
+      context: ${NEXUSOPS_REPO_ROOT}
+      dockerfile: e2e/sentinel.Dockerfile
+
+    image: nexusops-sentinel:e2e
+
+    network_mode: service:opssight-api
+
+    environment:
+      NEXUSOPS_SENTINEL_AGENT_ID: e2e-agent
+      NEXUSOPS_SENTINEL_HOSTNAME: e2e-host
+      NEXUSOPS_SENTINEL_SPOOL_PATH: /state/telemetry.db
+      NEXUSOPS_SENTINEL_OPSSIGHT_ENDPOINT: 127.0.0.1:50051
+      NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_ENABLED: "true"
+      NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CA_CERT_PATH: /certs/ca.cert.pem
+      NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_CERT_PATH: /certs/client.cert.pem
+      NEXUSOPS_SENTINEL_OPSSIGHT_MTLS_CLIENT_KEY_PATH: /certs/client.key.pem
+
+    volumes:
+      - ${NEXUSOPS_E2E_CERT_ROOT}/ca/ca.cert.pem:/certs/ca.cert.pem:ro
+      - ${NEXUSOPS_E2E_CERT_ROOT}/agents/e2e-agent/client.cert.pem:/certs/client.cert.pem:ro
+      - ${NEXUSOPS_E2E_CERT_ROOT}/agents/e2e-agent/client.key.pem:/certs/client.key.pem:ro
+
+    tmpfs:
+      - /state
+
+    depends_on:
+      opssight-api:
+        condition: service_healthy
+
+    command:
+      - --run-seconds
+      - "300"
+
+    restart: "no"
+
+  e2e-target:
+    image: python:3.12.11-alpine3.22
+
+    command:
+      - python
+      - -m
+      - http.server
+      - "18080"
+      - --bind
+      - 0.0.0.0
+
+    networks:
+      - backend
+
+    profiles:
+      - recovery-target
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18080/', timeout=2)"
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s

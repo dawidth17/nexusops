@@ -1,12 +1,22 @@
 # NexusOps Console
 
-The NexusOps Console is the web interface for NexusOps operators.
+The NexusOps Console is the shared web interface used by NexusOps operators.
 
-The current implementation provides the initial shared authentication flow used by the platform.
+The Console is implemented with:
+
+```text
+React
+TypeScript
+Vite
+React Router
+Vitest
+React Testing Library
+Playwright
+```
 
 ## Authentication
 
-The Console authenticates users through Keycloak using OpenID Connect.
+Authentication uses Keycloak through OpenID Connect.
 
 The browser uses:
 
@@ -14,89 +24,118 @@ The browser uses:
 OAuth 2.0 Authorization Code + PKCE
 ```
 
-PKCE uses the `S256` code challenge method.
+PKCE uses the `S256` challenge method.
 
-The Console does not store a Keycloak client secret.
+The Console stores session authentication data in `sessionStorage`.
 
-Authentication currently supports:
+Frontend role checks are used only to control the user interface.
 
-- OIDC discovery
-- login redirect
-- PKCE code verifier and challenge generation
-- authorization callback handling
-- authorization code exchange
-- access token storage for the browser session
-- display of basic authenticated identity information
-- Keycloak logout
+ServiceCore and OpsSight independently validate the access token and enforce authorization on every protected backend request.
 
-Backend authorization is not performed by the Console.
+## Pages
 
-ServiceCore and OpsSight independently validate access tokens and enforce roles server-side.
-
-## Current implementation
-
-The current Console is intentionally minimal and uses:
+The Console provides:
 
 ```text
-HTML
-CSS
-JavaScript
+Overview
+Hosts
+Alerts
+Incidents
 ```
 
-It provides the authentication foundation before the full operator interface is implemented.
+Overview aggregates the current platform state from OpsSight and ServiceCore.
 
-## Configuration
+Hosts shows monitored hosts and derives useful operational state from their configured checks.
 
-Browser configuration is stored in:
+Alerts shows OpsSight alert lifecycle state and correlation IDs.
+
+Incidents shows ServiceCore incident state and monitoring context.
+
+Monitoring incidents expose the link back to their originating OpsSight alert through the stored source alert ID and correlation ID.
+
+## Backend access
+
+The production Console container uses Nginx as both the static file server and same-origin reverse proxy.
+
+Browser requests use:
 
 ```text
-config.js
+/opssight/api/v1/...
+/servicecore/api/v1/...
 ```
 
-The default local configuration uses:
+Nginx forwards those requests to the corresponding backend service on the Docker Compose network.
 
-```text
-issuer:
-http://127.0.0.1:8081/realms/nexusops
-
-client:
-nexusops-console
-```
+This avoids requiring permissive browser CORS configuration for the local NexusOps stack.
 
 ## Local development
 
-The Console is served through Nginx in Docker Compose.
-
-From Ubuntu / WSL:
+Install dependencies:
 
 ```bash
-cd ~/projects/nexusops/infra/compose
-
-docker compose up \
-  -d \
-  keycloak \
-  console
+npm install
 ```
 
-Open:
+Start the Vite development server:
+
+```bash
+npm run dev
+```
+
+The development server listens on:
 
 ```text
 http://127.0.0.1:3001
 ```
 
-The login flow redirects the browser to Keycloak and then back to the Console.
+The complete Docker Compose Console is also exposed on the same default address.
 
-## Security
+## Quality checks
 
-The Console:
+Run TypeScript validation:
 
-- uses Authorization Code rather than the implicit flow
-- uses PKCE with SHA-256
-- validates the OAuth state value
-- does not contain a client secret
-- stores session authentication data in `sessionStorage`
-- relies on backend services for authorization decisions
+```bash
+npm run typecheck
+```
 
-The current JavaScript JWT parsing is used only to display user information.
+Run unit and component tests:
 
-It is not used to authorize backend operations.
+```bash
+npm test
+```
+
+Build the production application:
+
+```bash
+npm run build
+```
+
+Install the Playwright Chromium browser:
+
+```bash
+npx playwright install --with-deps chromium
+```
+
+Run the browser tests:
+
+```bash
+npm run test:e2e
+```
+
+## Browser flow
+
+Playwright covers the critical operator workflow:
+
+```text
+authenticated Console
+    ->
+OpsSight alert
+    ->
+linked ServiceCore incident
+    ->
+authorized incident lifecycle action
+```
+
+Backend requests in the browser test are controlled fixtures so the Console flow can be validated independently from the final full-platform end-to-end scenario.
+
+The complete live NexusOps integration flow is covered by the later integration milestone.

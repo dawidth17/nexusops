@@ -1,0 +1,125 @@
+name: Console CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "console/**"
+      - ".github/workflows/console-ci.yml"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "console/**"
+      - ".github/workflows/console-ci.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: TypeScript and tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install dependencies
+        working-directory: console
+        run: |
+          npm ci
+
+      - name: Type check
+        working-directory: console
+        run: |
+          npm run typecheck
+
+      - name: Run unit tests
+        working-directory: console
+        run: |
+          npm test
+
+      - name: Build Console
+        working-directory: console
+        run: |
+          npm run build
+
+      - name: Install Playwright Chromium
+        working-directory: console
+        run: |
+          npx playwright install \
+            --with-deps \
+            chromium
+
+      - name: Run browser tests
+        working-directory: console
+        run: |
+          npm run test:e2e
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-24.04
+
+    needs:
+      - verify
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build Console image
+        run: |
+          docker build \
+            --file console/Dockerfile \
+            --tag nexusops-console:${{ github.sha }} \
+            console
+
+      - name: Start Console image
+        run: |
+          docker run \
+            --detach \
+            --name nexusops-console-ci \
+            --publish 13001:80 \
+            nexusops-console:${{ github.sha }}
+
+      - name: Smoke test Console
+        run: |
+          for attempt in {1..30}; do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://127.0.0.1:13001/ \
+              | grep -q \
+                "NexusOps Console"
+            then
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          docker logs \
+            nexusops-console-ci
+
+          exit 1
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm \
+            -f \
+            nexusops-console-ci \
+            || true

@@ -50,6 +50,9 @@ dist/
 coverage/
 *.tsbuildinfo
 
+console/playwright-report/
+console/test-results/
+
 # c and c++
 sentinel-agent/build/
 sentinel-agent/build-*/

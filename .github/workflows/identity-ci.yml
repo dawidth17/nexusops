@@ -41,6 +41,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
       - name: Prepare environment
         working-directory: infra/compose
         run: |
@@ -52,10 +59,17 @@ jobs:
             infra/keycloak/realm/nexusops-realm.json \
             >/dev/null
 
-      - name: Validate Console JavaScript
+      - name: Install Console dependencies
+        working-directory: console
         run: |
-          node --check console/config.js
-          node --check console/app.js
+          npm ci
+
+      - name: Validate Console
+        working-directory: console
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
 
       - name: Validate Compose
         working-directory: infra/compose
@@ -67,6 +81,7 @@ jobs:
         run: |
           docker compose up \
             --detach \
+            --build \
             keycloak \
             console
 
@@ -95,13 +110,27 @@ jobs:
 
       - name: Verify Console
         run: |
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            http://127.0.0.1:3001/ \
-            | grep -q \
-              "NexusOps Console"
+          for attempt in {1..30}; do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://127.0.0.1:3001/ \
+              | grep -q \
+                "NexusOps Console"
+            then
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          docker compose \
+            --env-file infra/compose/.env \
+            -f infra/compose/compose.yml \
+            logs console
+
+          exit 1
 
       - name: Create development user
         run: |
